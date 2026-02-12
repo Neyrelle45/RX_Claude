@@ -1,12 +1,35 @@
-import streamlit as st
+import sys
+import subprocess
 import cv2
 import numpy as np
 from PIL import Image
-import tensorflow as tf
-from tensorflow import keras
 import plotly.graph_objects as go
 from streamlit_drawable_canvas import st_canvas
 import io
+import streamlit as st
+
+# ─── Auto-installation de TensorFlow ─────────────────────────────────────────
+# TF ne peut pas être dans requirements.txt (conflit avec les dépendances
+# système de Streamlit Cloud). On l'installe une seule fois ici.
+@st.cache_resource(show_spinner=False)
+def _install_tensorflow():
+    try:
+        import tensorflow  # noqa: F401
+    except ImportError:
+        with st.spinner("⏳ Installation de TensorFlow (une seule fois, ~2 min)..."):
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install",
+                "tensorflow-cpu==2.13.0",
+                "--quiet", "--no-warn-script-location"
+            ])
+        st.cache_resource.clear()
+        st.rerun()
+
+_install_tensorflow()
+
+import tensorflow as tf       # noqa: E402
+from tensorflow import keras  # noqa: E402
+# ─────────────────────────────────────────────────────────────────────────────
 
 # Import des fonctions utilitaires
 from utils.void_analysis_utils import (
@@ -496,6 +519,10 @@ def main():
         - **Image analysée**: Format PNG avec visualisation colorée
         - **Rapport JSON**: Données quantitatives pour traçabilité
         """)
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
