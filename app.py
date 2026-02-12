@@ -7,6 +7,8 @@ from tensorflow import keras
 import plotly.graph_objects as go
 from streamlit_drawable_canvas import st_canvas
 import io
+import os
+import tempfile
 
 # Import des fonctions utilitaires
 from void_analysis_utils import (
