@@ -18,7 +18,7 @@ def _install_tensorflow():
         with st.spinner("⏳ Installation de TensorFlow (une seule fois, ~2 min)..."):
             subprocess.check_call([
                 sys.executable, "-m", "pip", "install",
-                "tensorflow-cpu==2.13.0",
+                "tensorflow-cpu",
                 "--quiet", "--no-warn-script-location"
             ])
         st.cache_resource.clear()
