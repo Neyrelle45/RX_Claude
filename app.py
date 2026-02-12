@@ -160,18 +160,29 @@ def main():
         
         # Chargement du modèle
         st.subheader("Modèle")
-        model_path = st.text_input(
-            "Chemin du modèle",
-            value="models/void_detection_best.h5",
-            help="Chemin vers le fichier .h5 du modèle entraîné"
+        uploaded_model = st.file_uploader(
+            "Charger le fichier du modèle (.h5)",
+            type=['h5'],
+            help="Sélectionnez le fichier .h5 du modèle entraîné"
         )
         
-        if st.button("🔄 Charger le modèle", use_container_width=True):
-            with st.spinner("Chargement du modèle..."):
-                model = load_model(model_path)
-                if model is not None:
-                    st.session_state['model'] = model
-                    st.success("✅ Modèle chargé avec succès!")
+        if uploaded_model is not None:
+            if st.button("🔄 Initialiser le modèle", use_container_width=True):
+                with st.spinner("Chargement du modèle..."):
+                    # Création d'un fichier temporaire car Keras a besoin d'un chemin 
+                    # physique pour charger un modèle .h5 complet
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.h5') as tmp:
+                        tmp.write(uploaded_model.getvalue())
+                        tmp_path = tmp.name
+                    
+                    model = load_model(tmp_path)
+                    
+                    if model is not None:
+                        st.session_state['model'] = model
+                        st.success("✅ Modèle chargé avec succès!")
+                        # Nettoyage du fichier temporaire
+                        os.remove(tmp_path)
         
         st.divider()
         
