@@ -7,28 +7,6 @@ import plotly.graph_objects as go
 import io
 import streamlit as st
 
-# ─── Auto-installation de TensorFlow ─────────────────────────────────────────
-# TF ne peut pas être dans requirements.txt (conflit avec les dépendances
-# système de Streamlit Cloud). On l'installe une seule fois ici.
-@st.cache_resource(show_spinner=False)
-def _install_tensorflow():
-    try:
-        import tensorflow  # noqa: F401
-    except ImportError:
-        with st.spinner("⏳ Installation de TensorFlow (une seule fois, ~2 min)..."):
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install",
-                "tensorflow-cpu",
-                "--quiet", "--no-warn-script-location"
-            ])
-        st.cache_resource.clear()
-        st.rerun()
-
-_install_tensorflow()
-
-import tensorflow as tf       # noqa: E402
-from tensorflow import keras  # noqa: E402
-# ─────────────────────────────────────────────────────────────────────────────
 
 # Import des fonctions utilitaires
 from utils.void_analysis_utils import (
