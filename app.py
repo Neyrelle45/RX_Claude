@@ -4,7 +4,6 @@ import cv2
 import numpy as np
 from PIL import Image
 import plotly.graph_objects as go
-from streamlit_drawable_canvas import st_canvas
 import io
 import streamlit as st
 
@@ -112,22 +111,14 @@ def dice_coefficient(y_true, y_pred, smooth=1e-6):
     return (2. * intersection + smooth) / (tf.keras.backend.sum(y_true_f) + tf.keras.backend.sum(y_pred_f) + smooth)
 
 
-def create_mask_from_canvas(canvas_result, original_shape):
-    """Crée un masque à partir du dessin sur canvas"""
-    if canvas_result.image_data is None:
-        return None
-    
-    # Extraire le canal alpha (où les dessins apparaissent)
-    canvas_data = canvas_result.image_data[:, :, 3]
-    
-    # Créer un masque: zones dessinées = 1, reste = 0
-    mask = (canvas_data > 0).astype(np.uint8) * 255
-    
-    # Redimensionner au format original si nécessaire
-    if mask.shape != original_shape[:2]:
-        mask = cv2.resize(mask, (original_shape[1], original_shape[0]), 
-                         interpolation=cv2.INTER_NEAREST)
-    
+def create_mask_from_coords(h, w, x1_pct, y1_pct, x2_pct, y2_pct):
+    """Crée un masque rectangulaire à partir de pourcentages de coordonnées"""
+    mask = np.zeros((h, w, 3), dtype=np.uint8)
+    x1 = int(w * x1_pct / 100)
+    y1 = int(h * y1_pct / 100)
+    x2 = int(w * x2_pct / 100)
+    y2 = int(h * y2_pct / 100)
+    mask[y1:y2, x1:x2, 1] = 255  # vert = zone à inspecter
     return mask
 
 
@@ -276,72 +267,35 @@ def main():
             col1, col2 = st.columns([2, 1])
             
             with col1:
-                # Canvas pour dessiner le masque
-                canvas_height = min(600, int(image_rgb.shape[0] * 600 / image_rgb.shape[1]))
-                
-                canvas_result = st_canvas(
-                    fill_color="rgba(0, 255, 0, 0.3)",
-                    stroke_width=20,
-                    stroke_color="rgba(0, 255, 0, 0.8)",
-                    background_image=Image.fromarray(image_rgb),
-                    update_streamlit=True,
-                    height=canvas_height,
-                    width=600,
-                    drawing_mode="freedraw",
-                    key="canvas",
-                )
+                # Prévisualisation de l'image
+                st.image(image_rgb, caption="Image chargée", use_container_width=True)
             
             with col2:
-                st.markdown("**Outils de dessin:**")
-                st.markdown("- 🖊️ Dessinez pour créer le masque")
-                st.markdown("- 🗑️ Utilisez l'effaceur pour corriger")
-                st.markdown("- 🔄 Rafraîchissez pour recommencer")
+                st.markdown("**Zone d'inspection (% de l'image):**")
+                st.caption("Délimitez le rectangle de la zone à analyser.")
+                x1_pct = st.slider("Bord gauche  (%)", 0, 49, 10, key="x1")
+                x2_pct = st.slider("Bord droit   (%)", 51, 100, 90, key="x2")
+                y1_pct = st.slider("Bord haut    (%)", 0, 49, 10, key="y1")
+                y2_pct = st.slider("Bord bas     (%)", 51, 100, 90, key="y2")
                 
-                if st.button("🗑️ Effacer le masque", use_container_width=True):
-                    st.rerun()
-                
-                # Option de masque rectangulaire simple
-                st.divider()
-                st.markdown("**Masque rectangulaire:**")
-                use_rect_mask = st.checkbox("Utiliser un masque rectangulaire")
-                
-                if use_rect_mask:
-                    st.markdown("Définissez les marges (en % de l'image):")
-                    margin_top = st.slider("Marge haut", 0, 50, 10)
-                    margin_bottom = st.slider("Marge bas", 0, 50, 10)
-                    margin_left = st.slider("Marge gauche", 0, 50, 10)
-                    margin_right = st.slider("Marge droite", 0, 50, 10)
+                # Prévisualisation du masque sur l'image
+                preview = image_rgb.copy()
+                h_p, w_p = preview.shape[:2]
+                x1p = int(w_p * x1_pct / 100); x2p = int(w_p * x2_pct / 100)
+                y1p = int(h_p * y1_pct / 100); y2p = int(h_p * y2_pct / 100)
+                cv2.rectangle(preview, (x1p, y1p), (x2p, y2p), (0, 255, 0), 3)
+                st.image(preview, caption="Zone verte = zone inspectée",
+                         use_container_width=True)
             
             # Bouton d'analyse
             st.subheader("3️⃣ Lancer l'analyse")
             
             if st.button("🚀 Analyser", type="primary", use_container_width=True):
-                # Créer le masque
-                if use_rect_mask:
-                    # Masque rectangulaire
-                    h, w = image_rgb.shape[:2]
-                    mask = np.zeros((h, w, 3), dtype=np.uint8)
-                    
-                    top = int(h * margin_top / 100)
-                    bottom = int(h * (100 - margin_bottom) / 100)
-                    left = int(w * margin_left / 100)
-                    right = int(w * (100 - margin_right) / 100)
-                    
-                    mask[top:bottom, left:right, 1] = 255  # Vert
-                else:
-                    # Masque dessiné
-                    if canvas_result.image_data is not None:
-                        canvas_mask = create_mask_from_canvas(canvas_result, image_rgb.shape)
-                        if canvas_mask is None or np.sum(canvas_mask) == 0:
-                            st.error("❌ Veuillez dessiner un masque avant d'analyser.")
-                            return
-                        
-                        # Convertir en masque couleur (vert)
-                        mask = np.zeros((image_rgb.shape[0], image_rgb.shape[1], 3), dtype=np.uint8)
-                        mask[:, :, 1] = canvas_mask
-                    else:
-                        st.error("❌ Veuillez dessiner un masque avant d'analyser.")
-                        return
+                # Créer le masque rectangulaire depuis les sliders
+                mask = create_mask_from_coords(
+                    image_rgb.shape[0], image_rgb.shape[1],
+                    x1_pct, y1_pct, x2_pct, y2_pct
+                )
                 
                 # Traiter l'image
                 with st.spinner("🔄 Analyse en cours..."):
@@ -519,10 +473,6 @@ def main():
         - **Image analysée**: Format PNG avec visualisation colorée
         - **Rapport JSON**: Données quantitatives pour traçabilité
         """)
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":
