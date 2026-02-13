@@ -1,7 +1,3 @@
-"""
-Fonctions utilitaires pour l'analyse d'images et la détection de voids
-"""
-
 import numpy as np
 import cv2
 from scipy import ndimage
@@ -34,38 +30,43 @@ def preprocess_image(image: np.ndarray, adjust_contrast: float = 1.0,
 
 def apply_mask(image: np.ndarray, mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Applique le masque d'inspection à l'image
-    
+    Applique le masque d'inspection a l'image.
+
     Args:
-        image: Image d'entrée
-        mask: Masque (vert = zone à inspecter, noir = zone d'exclusion)
-    
+        image : tableau numpy 2-D (H, W) en niveaux de gris
+        mask  : tableau numpy (H, W, 3) avec zone verte = inspecter
+                OU (H, W) binaire
+
     Returns:
-        image_masked: Image avec masque appliqué
-        inspection_mask: Masque binaire (1 = inspecter, 0 = exclure)
+        image_masked   : image 2-D (H, W) avec zones exclues a 0
+        inspection_mask: masque binaire (H, W) uint8 — 1 = inspecter
     """
-    # Extraire la zone verte du masque
-    if len(mask.shape) == 3:
-        green_channel = mask[:, :, 1]
-        red_channel = mask[:, :, 2]
-        blue_channel = mask[:, :, 0]
-        
-        # Zone verte: G élevé, R et B faibles
-        inspection_mask = (green_channel > 100) & (red_channel < 100) & (blue_channel < 100)
+    H_img, W_img = image.shape[:2]
+
+    # ── Extraire le canal vert ────────────────────────────────────────────────
+    if mask.ndim == 3:
+        # BGR ou RGB : canal 1 = vert dans les deux cas (G est toujours index 1)
+        green  = mask[:, :, 1]
+        red    = mask[:, :, 2]
+        blue   = mask[:, :, 0]
+        binary = ((green > 100) & (red < 100) & (blue < 100)).astype(np.uint8)
     else:
-        # Si le masque est en niveaux de gris
-        inspection_mask = mask > 127
-    
-    inspection_mask = inspection_mask.astype(np.uint8)
-    
-    # Appliquer le masque à l'image
-    if len(image.shape) == 3:
+        binary = (mask > 127).astype(np.uint8)
+
+    # ── Redimensionner le masque si sa taille differe de l'image ─────────────
+    if binary.shape != (H_img, W_img):
+        binary = cv2.resize(binary, (W_img, H_img), interpolation=cv2.INTER_NEAREST)
+        binary = (binary > 0).astype(np.uint8)
+
+    # ── Appliquer sur image 2-D (niveaux de gris) ────────────────────────────
+    if image.ndim == 2:
+        image_masked = cv2.bitwise_and(image, image, mask=binary)
+    else:
+        # Image 3 canaux : appliquer canal par canal
         image_masked = image.copy()
-        image_masked[inspection_mask == 0] = 0
-    else:
-        image_masked = cv2.bitwise_and(image, image, mask=inspection_mask)
-    
-    return image_masked, inspection_mask
+        image_masked[binary == 0] = 0
+
+    return image_masked, binary
 
 
 def filter_geometric_shapes(binary_mask: np.ndarray, 
