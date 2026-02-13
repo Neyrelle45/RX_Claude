@@ -192,7 +192,7 @@ def process_image(image_rgb, mask_color, model, contrast, brightness, filter_geo
     # 10. Analyse et visualisation
     results   = analyze_voids(pred_full, bin_mask, filter_geo)
     vis_image = create_visualization(image_rgb, pred_full, bin_mask, results)
-    return vis_image, results
+    return vis_image, results, pred_full
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 def sidebar():
@@ -409,11 +409,12 @@ def main():
         st.subheader("3️⃣ Lancer l'analyse")
         if st.button("🚀 Analyser", type="primary", use_container_width=True):
             with st.spinner("🔄 Analyse en cours…"):
-                vis_image, results = process_image(
+                vis_image, results, pred_raw = process_image(
                     image_rgb, mask, model, contrast, brightness, filter_geo
                 )
             st.session_state["results"]    = results
             st.session_state["vis_image"]  = vis_image
+            st.session_state["pred_raw"]   = pred_raw
             st.session_state["last_fname"] = up_img.name
 
         if "results" in st.session_state:
@@ -423,16 +424,57 @@ def main():
 
             st.success("✅ Analyse terminée!")
 
-            # ── Images côte à côte ────────────────────────────────────────────
+            # ── Images côte à côte + heatmap ─────────────────────────────────
             st.subheader("4️⃣ Résultats")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("**Image originale**")
-                st.image(image_rgb, use_container_width=True)
-            with c2:
-                st.markdown("**Image analysée**")
-                st.caption("🔵 Soudure · 🔴 Void/manque · 🟦 Cadre = plus gros void")
-                st.image(vis_image, use_container_width=True)
+
+            # Récupérer la prédiction brute pour la heatmap
+            pred_raw  = st.session_state.get("pred_raw", None)
+
+            tab_res, tab_heat = st.tabs(["🖼️ Analyse", "🌡️ Heatmap"])
+
+            with tab_res:
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("**Image originale**")
+                    st.image(image_rgb, use_container_width=True)
+                with c2:
+                    st.markdown("**Image analysée**")
+                    st.caption("🔵 Soudure · 🔴 Void/manque · 🟦 Cadre = plus gros void")
+                    st.image(vis_image, use_container_width=True)
+
+            with tab_heat:
+                if pred_raw is not None:
+                    st.markdown("**Probabilités brutes du modèle par canal**")
+                    st.caption(
+                        "Ces cartes montrent ce que le modèle *voit* réellement. "
+                        "Un canal void (canal 1) uniformément sombre indique que le modèle "
+                        "n\'a pas appris à reconnaître les voids — problème d\'entraînement."
+                    )
+
+                    hc1, hc2, hc3 = st.columns(3)
+                    labels = ["Canal 0 — Soudure", "Canal 1 — Voids/Manques", "Canal 2 — Fond"]
+                    cmaps  = [cv2.COLORMAP_BONE, cv2.COLORMAP_HOT, cv2.COLORMAP_WINTER]
+
+                    for col, (label, cmap_id, ch) in zip(
+                        [hc1, hc2, hc3],
+                        zip(labels, cmaps, [0, 1, 2])
+                    ):
+                        with col:
+                            st.markdown(f"**{label}**")
+                            ch_data = (pred_raw[:, :, ch] * 255).astype(np.uint8)
+                            heatmap  = cv2.applyColorMap(ch_data, cmap_id)
+                            heatmap  = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+                            # Superposer sur l'image originale (50%)
+                            img_resized = cv2.resize(image_rgb,
+                                                     (heatmap.shape[1], heatmap.shape[0]))
+                            blended = cv2.addWeighted(img_resized, 0.4, heatmap, 0.6, 0)
+                            st.image(blended, use_container_width=True)
+                            vmin = pred_raw[:, :, ch].min()
+                            vmax = pred_raw[:, :, ch].max()
+                            vmean = pred_raw[:, :, ch].mean()
+                            st.caption(f"min={vmin:.3f} · max={vmax:.3f} · moy={vmean:.3f}")
+                else:
+                    st.info("Lancez une analyse pour voir les heatmaps.")
 
             # ── Tableau de résultats ──────────────────────────────────────────
             st.subheader("📊 Résultats de l'analyse")
