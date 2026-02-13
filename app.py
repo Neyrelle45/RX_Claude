@@ -159,15 +159,45 @@ def overlay_preview(image_rgb: np.ndarray, mask_color: np.ndarray) -> np.ndarray
 # ─── Traitement principal ─────────────────────────────────────────────────────
 
 def process_image(image, mask, model, contrast, brightness, filter_geo):
-    gray      = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if len(image.shape)==3 else image.copy()
+    # 1. Niveaux de gris
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if len(image.shape) == 3 else image.copy()
+
+    # 2. Pretraitement + masque
     processed = preprocess_image(gray, contrast, brightness)
     masked_image, inspection_mask = apply_mask(processed, mask)
 
-    resized, _ = resize_with_aspect_ratio(masked_image, (512, 512))
-    inp = np.expand_dims(resized.astype(np.float32)/255.0, axis=(0,-1))
-    pred = model.predict(inp, verbose=0)[0]
+    # 3. Redimensionnement 512x512
+    TARGET_H, TARGET_W = 512, 512
+    resized, _ = resize_with_aspect_ratio(masked_image, (TARGET_H, TARGET_W))
+
+    # Garantir la forme exacte (certains cas de padding peuvent differ)
+    if resized.shape[0] != TARGET_H or resized.shape[1] != TARGET_W:
+        resized = cv2.resize(resized, (TARGET_W, TARGET_H), interpolation=cv2.INTER_LINEAR)
+
+    # 4. Normaliser en float32
+    arr = resized.astype(np.float32) / 255.0
+
+    # 5. Construire explicitement le tenseur (1, 512, 512, 1)
+    #    On evite axis=(0,-1) qui est ambigu selon les versions numpy/keras
+    if arr.ndim == 2:
+        # (H, W) -> (1, H, W, 1)  : cas normal
+        inp = arr[np.newaxis, :, :, np.newaxis]
+    elif arr.ndim == 3 and arr.shape[2] == 3:
+        # Image couleur inattendue -> convertir en gris
+        gray2 = cv2.cvtColor((arr * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        inp = gray2.astype(np.float32)[np.newaxis, :, :, np.newaxis] / 255.0
+    elif arr.ndim == 3 and arr.shape[2] == 1:
+        inp = arr[np.newaxis, :, :, :]
+    else:
+        raise ValueError(f"Shape inattendue apres resize: {arr.shape}")
+
+    # 6. Prediction
+    pred = model.predict(inp, verbose=0)[0]   # -> (H, W, 3)
+
+    # 7. Remettre a la taille originale
     pred = cv2.resize(pred, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
 
+    # 8. Analyse et visu
     results   = analyze_voids(pred, inspection_mask, filter_geo)
     vis_image = create_visualization(image, pred, inspection_mask, results)
     return vis_image, results
