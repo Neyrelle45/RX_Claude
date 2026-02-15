@@ -8,7 +8,7 @@ from .void_analysis_utils import (
     analyze_voids,
     create_visualization,
     resize_with_aspect_ratio,
-    inverse_resize,
+    remove_padding_and_restore,
     filter_geometric_shapes
 )
 
@@ -18,6 +18,8 @@ __all__ = [
     'analyze_voids',
     'create_visualization',
     'resize_with_aspect_ratio',
-    'inverse_resize',
+    'remove_padding_and_restore',
     'filter_geometric_shapes'
 ]
+
+
