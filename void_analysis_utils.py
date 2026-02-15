@@ -1,374 +1,288 @@
+"""
+Fonctions utilitaires V4 — padding correct, seuil adaptatif, visu améliorée.
+"""
+
 import numpy as np
 import cv2
-from scipy import ndimage
-from skimage import measure, morphology
-from typing import Tuple, Dict, List
+from skimage import measure
+from typing import Tuple, Dict, Optional
 
 
-def preprocess_image(image: np.ndarray, adjust_contrast: float = 1.0, 
+# ─── Prétraitement ────────────────────────────────────────────────────────────
+
+def preprocess_image(image: np.ndarray,
+                     adjust_contrast: float = 1.0,
                      adjust_brightness: int = 0) -> np.ndarray:
-    """
-    Prétraite l'image avec ajustement de contraste et luminosité
-    
-    Args:
-        image: Image en niveaux de gris
-        adjust_contrast: Facteur de contraste (1.0 = pas de changement)
-        adjust_brightness: Ajustement de luminosité (-100 à 100)
-    
-    Returns:
-        Image prétraitée
-    """
-    # Ajustement du contraste et de la luminosité
     adjusted = cv2.convertScaleAbs(image, alpha=adjust_contrast, beta=adjust_brightness)
-    
-    # Réduction du bruit avec filtre bilatéral
-    # Préserve les bords tout en lissant le bruit
-    denoised = cv2.bilateralFilter(adjusted, 9, 75, 75)
-    
-    return denoised
+    return cv2.bilateralFilter(adjusted, 9, 75, 75)
 
+
+# ─── Masque ───────────────────────────────────────────────────────────────────
 
 def apply_mask(image: np.ndarray, mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Applique le masque d'inspection a l'image.
-
-    Args:
-        image : tableau numpy 2-D (H, W) en niveaux de gris
-        mask  : tableau numpy (H, W, 3) avec zone verte = inspecter
-                OU (H, W) binaire
-
-    Returns:
-        image_masked   : image 2-D (H, W) avec zones exclues a 0
-        inspection_mask: masque binaire (H, W) uint8 — 1 = inspecter
-    """
-    H_img, W_img = image.shape[:2]
-
-    # ── Extraire le canal vert ────────────────────────────────────────────────
+    H, W = image.shape[:2]
     if mask.ndim == 3:
-        # BGR ou RGB : canal 1 = vert dans les deux cas (G est toujours index 1)
-        green  = mask[:, :, 1]
-        red    = mask[:, :, 2]
-        blue   = mask[:, :, 0]
-        binary = ((green > 100) & (red < 100) & (blue < 100)).astype(np.uint8)
+        g, r, b = mask[:,:,1], mask[:,:,2], mask[:,:,0]
+        binary = ((g > 100) & (r < 100) & (b < 100)).astype(np.uint8)
     else:
         binary = (mask > 127).astype(np.uint8)
-
-    # ── Redimensionner le masque si sa taille differe de l'image ─────────────
-    if binary.shape != (H_img, W_img):
-        binary = cv2.resize(binary, (W_img, H_img), interpolation=cv2.INTER_NEAREST)
+    if binary.shape != (H, W):
+        binary = cv2.resize(binary, (W, H), interpolation=cv2.INTER_NEAREST)
         binary = (binary > 0).astype(np.uint8)
-
-    # ── Appliquer sur image 2-D (niveaux de gris) ────────────────────────────
     if image.ndim == 2:
-        image_masked = cv2.bitwise_and(image, image, mask=binary)
+        return cv2.bitwise_and(image, image, mask=binary), binary
+    masked = image.copy(); masked[binary == 0] = 0
+    return masked, binary
+
+
+# ─── Resize avec conservation du ratio ────────────────────────────────────────
+
+def resize_with_aspect_ratio(image: np.ndarray,
+                              target_size: Tuple[int, int],
+                              pad_color: int = 0) -> Tuple[np.ndarray, Dict]:
+    """
+    Resize + padding centré.
+    target_size = (target_H, target_W)
+    Retourne (image_paddée, transform_dict)
+    transform_dict contient tout ce qu'il faut pour inverser proprement.
+    """
+    h, w   = image.shape[:2]
+    TH, TW = target_size
+
+    # Ratio qui conserve les proportions
+    scale = min(TW / w, TH / h)
+    nw    = int(round(w * scale))
+    nh    = int(round(h * scale))
+
+    resized = cv2.resize(image, (nw, nh), interpolation=cv2.INTER_LINEAR)
+
+    # Padding centré
+    pad_top    = (TH - nh) // 2
+    pad_bottom = TH - nh - pad_top
+    pad_left   = (TW - nw) // 2
+    pad_right  = TW - nw - pad_left
+
+    val = [pad_color] * 3 if image.ndim == 3 else pad_color
+    padded = cv2.copyMakeBorder(resized,
+                                pad_top, pad_bottom, pad_left, pad_right,
+                                cv2.BORDER_CONSTANT, value=val)
+
+    # Forcer la taille exacte (arrondi entier peut donner ±1 px)
+    if padded.shape[0] != TH or padded.shape[1] != TW:
+        if image.ndim == 3:
+            padded = padded[:TH, :TW, :]
+        else:
+            padded = padded[:TH, :TW]
+        # Recalcul précis
+        pad_bottom = max(0, TH - padded.shape[0])
+        pad_right  = max(0, TW - padded.shape[1])
+        if pad_bottom or pad_right:
+            padded = cv2.copyMakeBorder(padded, 0, pad_bottom, 0, pad_right,
+                                        cv2.BORDER_CONSTANT, value=val)
+
+    transform = dict(scale=scale,
+                     pad_top=pad_top, pad_left=pad_left,
+                     nh=nh, nw=nw,
+                     orig_h=h, orig_w=w)
+    return padded, transform
+
+
+def remove_padding_and_restore(pred_padded: np.ndarray,
+                                transform: Dict) -> np.ndarray:
+    """
+    1. Découpe la zone utile (enlève le padding)
+    2. Resize vers la taille originale de l'image
+    → Pas de distorsion car on utilise exactement le même ratio
+    """
+    pt = transform["pad_top"]
+    pl = transform["pad_left"]
+    nh = transform["nh"]
+    nw = transform["nw"]
+    orig_h = transform["orig_h"]
+    orig_w = transform["orig_w"]
+
+    # Sécurité : clip aux bords
+    h_pred, w_pred = pred_padded.shape[:2]
+    r1 = min(pt + nh, h_pred)
+    c1 = min(pl + nw, w_pred)
+
+    if pred_padded.ndim == 3:
+        cropped = pred_padded[pt:r1, pl:c1, :]
     else:
-        # Image 3 canaux : appliquer canal par canal
-        image_masked = image.copy()
-        image_masked[binary == 0] = 0
+        cropped = pred_padded[pt:r1, pl:c1]
 
-    return image_masked, binary
+    if cropped.shape[0] == 0 or cropped.shape[1] == 0:
+        # Fallback si le crop est vide (ne devrait pas arriver)
+        return cv2.resize(pred_padded, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+
+    return cv2.resize(cropped, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
 
-def filter_geometric_shapes(binary_mask: np.ndarray, 
-                           min_circularity: float = 0.6,
-                           min_aspect_ratio: float = 0.3) -> np.ndarray:
-    """
-    Filtre les formes géométriques parfaites (pistes, vias, etc.)
-    
-    Args:
-        binary_mask: Masque binaire des détections
-        min_circularity: Circularité minimale pour considérer comme void (0-1)
-        min_aspect_ratio: Ratio d'aspect minimal pour éviter les formes allongées
-    
-    Returns:
-        Masque filtré sans les formes géométriques artificielles
-    """
-    # Labelliser les composants connectés
-    labeled = measure.label(binary_mask, connectivity=2)
-    regions = measure.regionprops(labeled)
-    
-    filtered_mask = np.zeros_like(binary_mask)
-    
-    for region in regions:
-        # Calculer la circularité: 4π*area / perimeter²
-        if region.perimeter == 0:
+# ─── Filtrage géométrique ─────────────────────────────────────────────────────
+
+def filter_geometric_shapes(binary_mask: np.ndarray) -> np.ndarray:
+    labeled  = measure.label(binary_mask, connectivity=2)
+    regions  = measure.regionprops(labeled)
+    filtered = np.zeros_like(binary_mask)
+    for r in regions:
+        if r.perimeter == 0 or r.major_axis_length == 0:
             continue
-        
-        circularity = (4 * np.pi * region.area) / (region.perimeter ** 2)
-        
-        # Calculer le ratio d'aspect
-        if region.major_axis_length == 0:
-            continue
-        aspect_ratio = region.minor_axis_length / region.major_axis_length
-        
-        # Calculer l'écart par rapport à un rectangle parfait
-        bbox_area = region.bbox_area
-        extent = region.area / bbox_area if bbox_area > 0 else 0
-        
-        # Filtrer les formes trop parfaites (probablement des éléments du PCB)
-        is_perfect_circle = circularity > 0.95 and aspect_ratio > 0.95
-        is_perfect_rectangle = extent > 0.95 and aspect_ratio < 0.4
-        is_elongated = aspect_ratio < min_aspect_ratio
-        
-        # Garder seulement les formes organiques (voids naturels)
-        if not (is_perfect_circle or is_perfect_rectangle or is_elongated):
-            coords = region.coords
-            filtered_mask[coords[:, 0], coords[:, 1]] = 1
-    
-    return filtered_mask
+        circ = (4 * np.pi * r.area) / (r.perimeter ** 2)
+        ar   = r.minor_axis_length / r.major_axis_length
+        ext  = r.area / r.bbox_area if r.bbox_area > 0 else 0
+        # Exclure cercles parfaits, rectangles parfaits, formes allongées
+        if not ((circ > 0.92 and ar > 0.90) or
+                (ext  > 0.92 and ar < 0.45) or
+                (ar   < 0.20)):
+            filtered[labeled == r.label] = 1
+    return filtered
 
 
-def analyze_voids(prediction: np.ndarray, 
+# ─── Analyse des voids ────────────────────────────────────────────────────────
+
+def analyze_voids(prediction: np.ndarray,
                   inspection_mask: np.ndarray,
-                  filter_shapes: bool = True) -> Dict:
+                  filter_geometric: bool = True,
+                  void_threshold: Optional[float] = None) -> Dict:
     """
-    Analyse les voids détectés dans la prédiction
-    
-    Args:
-        prediction: Prédiction du modèle (H, W, 3) avec softmax
-        inspection_mask: Masque de la zone d'inspection
-        filter_shapes: Si True, filtre les formes géométriques parfaites
-    
-    Returns:
-        Dictionnaire avec les résultats d'analyse
+    Seuil adaptatif : percentile 85 des probas void dans la ROI.
+    Borné entre 0.03 et 0.55 pour couvrir les modèles peu confiants.
     """
-    # Extraire les classes
-    soudure_mask = prediction[:, :, 0] > 0.5  # Classe 0: soudure
-    voids_mask = prediction[:, :, 1] > 0.5     # Classe 1: voids/manques
-    
-    # Appliquer le masque d'inspection
-    soudure_mask = soudure_mask & (inspection_mask > 0)
-    voids_mask = voids_mask & (inspection_mask > 0)
-    
-    # Filtrer les formes géométriques si demandé
-    if filter_shapes:
-        voids_mask = filter_geometric_shapes(voids_mask.astype(np.uint8))
-    
-    # Calculer les surfaces
-    total_inspection_area = np.sum(inspection_mask > 0)
-    soudure_area = np.sum(soudure_mask)
-    voids_area = np.sum(voids_mask)
-    
-    # Calculer le ratio de voids
-    void_ratio = (voids_area / total_inspection_area * 100) if total_inspection_area > 0 else 0
-    
-    # Trouver le plus gros void
-    labeled_voids = measure.label(voids_mask, connectivity=2)
-    void_regions = measure.regionprops(labeled_voids)
-    
-    largest_void_area = 0
-    largest_void_ratio = 0
-    largest_void_bbox = None
-    largest_void_centroid = None
-    
-    if len(void_regions) > 0:
-        # Filtrer les voids qui touchent les bords du masque d'inspection
-        interior_voids = []
-        
-        for region in void_regions:
-            # Vérifier si le void touche les bords du masque
-            minr, minc, maxr, maxc = region.bbox
-            
-            # Créer un masque légèrement élargi pour vérifier les bords
-            border_width = 2
-            touches_border = False
-            
-            # Vérifier les 4 côtés
-            if minr < border_width or minc < border_width:
-                touches_border = True
-            if maxr > (inspection_mask.shape[0] - border_width):
-                touches_border = True
-            if maxc > (inspection_mask.shape[1] - border_width):
-                touches_border = True
-            
-            # Vérifier si le void touche la frontière du masque d'inspection
-            for coord in region.coords:
-                y, x = coord
-                # Vérifier dans un voisinage 3x3 s'il y a une zone exclue
-                if y > 0 and y < inspection_mask.shape[0]-1 and x > 0 and x < inspection_mask.shape[1]-1:
-                    neighborhood = inspection_mask[y-1:y+2, x-1:x+2]
-                    if np.any(neighborhood == 0):
-                        touches_border = True
-                        break
-            
-            if not touches_border:
-                interior_voids.append(region)
-        
-        # Trouver le plus gros void intérieur
-        if len(interior_voids) > 0:
-            largest_void = max(interior_voids, key=lambda r: r.area)
-            largest_void_area = largest_void.area
-            largest_void_ratio = (largest_void_area / total_inspection_area * 100) if total_inspection_area > 0 else 0
-            largest_void_bbox = largest_void.bbox
-            largest_void_centroid = largest_void.centroid
-    
-    # Créer les masques de visualisation
-    soudure_viz = soudure_mask.astype(np.uint8) * 255
-    voids_viz = voids_mask.astype(np.uint8) * 255
-    
-    results = {
-        'void_ratio': void_ratio,
-        'largest_void_ratio': largest_void_ratio,
-        'largest_void_area': largest_void_area,
-        'largest_void_bbox': largest_void_bbox,
-        'largest_void_centroid': largest_void_centroid,
-        'total_inspection_area': total_inspection_area,
-        'soudure_area': soudure_area,
-        'voids_area': voids_area,
-        'num_voids': len(void_regions),
-        'soudure_mask': soudure_viz,
-        'voids_mask': voids_viz,
-        'void_regions': void_regions
-    }
-    
-    return results
+    void_prob = prediction[:, :, 1]
+    roi_vals  = void_prob[inspection_mask > 0]
 
+    if void_threshold is None:
+        if len(roi_vals) > 0 and roi_vals.max() > 0.005:
+            thr = float(np.percentile(roi_vals, 85))
+            thr = float(np.clip(thr, 0.03, 0.55))
+        else:
+            thr = 0.10
+    else:
+        thr = void_threshold
+
+    soudure_mask = (prediction[:,:,0] > 0.5) & (inspection_mask > 0)
+    voids_raw    = (void_prob > thr)          & (inspection_mask > 0)
+
+    if filter_geometric and voids_raw.any():
+        voids_mask = filter_geometric_shapes(voids_raw.astype(np.uint8)) > 0
+    else:
+        voids_mask = voids_raw
+
+    total = int(np.sum(inspection_mask > 0))
+    n_soudure = int(np.sum(soudure_mask))
+    n_voids   = int(np.sum(voids_mask))
+    void_ratio = n_voids / total * 100 if total > 0 else 0.0
+
+    # Plus gros void intérieur
+    lv_area = 0; lv_ratio = 0.0; lv_bbox = None; lv_centroid = None
+
+    if voids_mask.any():
+        labeled  = measure.label(voids_mask.astype(np.uint8), connectivity=2)
+        regions  = measure.regionprops(labeled)
+        interior = []
+        for r in regions:
+            minr, minc, maxr, maxc = r.bbox
+            touches = (minr < 3 or minc < 3 or
+                       maxr > inspection_mask.shape[0]-3 or
+                       maxc > inspection_mask.shape[1]-3)
+            if not touches:
+                for y, x in r.coords[:30]:
+                    if 0 < y < inspection_mask.shape[0]-1 and \
+                       0 < x < inspection_mask.shape[1]-1:
+                        if np.any(inspection_mask[y-1:y+2, x-1:x+2] == 0):
+                            touches = True; break
+            if not touches:
+                interior.append(r)
+        if interior:
+            lv = max(interior, key=lambda x: x.area)
+            lv_area     = lv.area
+            lv_ratio    = lv_area / total * 100 if total > 0 else 0.0
+            lv_bbox     = lv.bbox
+            lv_centroid = lv.centroid
+
+    num_blobs = int(measure.label(voids_mask.astype(np.uint8)).max())
+
+    return dict(void_ratio=float(void_ratio),
+                largest_void_ratio=float(lv_ratio),
+                largest_void_area=lv_area,
+                largest_void_bbox=lv_bbox,
+                largest_void_centroid=lv_centroid,
+                num_voids=num_blobs,
+                total_inspection_area=total,
+                soudure_area=n_soudure,
+                voids_area=n_voids,
+                void_threshold_used=float(thr))
+
+
+# ─── Visualisation ────────────────────────────────────────────────────────────
 
 def create_visualization(original_image: np.ndarray,
-                        prediction: np.ndarray,
-                        inspection_mask: np.ndarray,
-                        analysis_results: Dict) -> np.ndarray:
+                         prediction: np.ndarray,
+                         inspection_mask: np.ndarray,
+                         analysis_results: Dict) -> np.ndarray:
     """
-    Crée une visualisation colorée des résultats
-    
-    Args:
-        original_image: Image originale
-        prediction: Prédiction du modèle
-        inspection_mask: Masque d'inspection
-        analysis_results: Résultats de l'analyse
-    
-    Returns:
-        Image RGB avec visualisation
+    Image annotée avec couleurs nettes :
+      Soudure  → bleu  (0, 50, 210)   overlay fort
+      Void     → rouge (220, 0, 0)    overlay très fort + contour blanc
+      Fond     → image assombrie
+      Exclu    → noir absolu
+      Cadre    → bleu ciel (80, 220, 255) + croix
+      Contour masque → vert fin
     """
-    # Créer une image RGB
-    if len(original_image.shape) == 2:
-        vis_image = cv2.cvtColor(original_image, cv2.COLOR_GRAY2RGB)
+    if original_image.ndim == 2:
+        base = cv2.cvtColor(original_image, cv2.COLOR_GRAY2RGB)
     else:
-        vis_image = original_image.copy()
-    
-    h, w = vis_image.shape[:2]
-    overlay = np.zeros((h, w, 3), dtype=np.uint8)
-    
-    # Extraire les masques
-    soudure_mask = prediction[:, :, 0] > 0.5
-    voids_mask = prediction[:, :, 1] > 0.5
-    
-    # Appliquer le masque d'inspection
-    soudure_mask = soudure_mask & (inspection_mask > 0)
-    voids_mask = voids_mask & (inspection_mask > 0)
-    
-    # Colorer la soudure en bleu foncé (B=255, G=0, R=0)
-    overlay[soudure_mask, 0] = 255  # Blue channel
-    overlay[soudure_mask, 1] = 0    # Green channel
-    overlay[soudure_mask, 2] = 0    # Red channel
-    
-    # Colorer les voids en rouge (B=0, G=0, R=255)
-    overlay[voids_mask, 0] = 0      # Blue channel
-    overlay[voids_mask, 1] = 0      # Green channel
-    overlay[voids_mask, 2] = 255    # Red channel
-    
-    # Mélanger l'overlay avec l'image originale
-    alpha = 0.5
-    vis_image = cv2.addWeighted(vis_image, 1-alpha, overlay, alpha, 0)
-    
-    # Dessiner le contour du plus gros void en bleu ciel épais
-    if analysis_results['largest_void_bbox'] is not None:
-        bbox = analysis_results['largest_void_bbox']
-        minr, minc, maxr, maxc = bbox
-        
-        # Bleu ciel: BGR = (255, 255, 135)
-        thickness = 5
-        cv2.rectangle(vis_image, (minc, minr), (maxc, maxr), (255, 255, 135), thickness)
-        
-        # Ajouter un cercle au centre
-        if analysis_results['largest_void_centroid'] is not None:
-            cy, cx = analysis_results['largest_void_centroid']
-            cv2.circle(vis_image, (int(cx), int(cy)), 10, (255, 255, 135), thickness)
-    
-    return vis_image
+        base = original_image.copy()
+    H, W = base.shape[:2]
 
+    thr       = analysis_results.get("void_threshold_used", 0.10)
+    void_prob = prediction[:,:,1]
+    soudure   = (prediction[:,:,0] > 0.5)  & (inspection_mask > 0)
+    voids     = (void_prob > thr)           & (inspection_mask > 0)
+    fond      = (inspection_mask > 0)      & ~soudure & ~voids
+    exclu     = (inspection_mask == 0)
 
-def resize_with_aspect_ratio(image: np.ndarray, target_size: Tuple[int, int],
-                             pad_color: int = 0) -> Tuple[np.ndarray, Tuple]:
-    """
-    Redimensionne l'image en conservant le ratio d'aspect
-    
-    Args:
-        image: Image à redimensionner
-        target_size: Taille cible (height, width)
-        pad_color: Couleur de padding
-    
-    Returns:
-        image_resized: Image redimensionnée avec padding
-        (scale, pad_top, pad_left): Paramètres de transformation
-    """
-    h, w = image.shape[:2]
-    target_h, target_w = target_size
-    
-    # Calculer le ratio de redimensionnement
-    scale = min(target_w / w, target_h / h)
-    
-    # Nouvelles dimensions
-    new_w = int(w * scale)
-    new_h = int(h * scale)
-    
-    # Redimensionner
-    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-    
-    # Calculer le padding
-    pad_top = (target_h - new_h) // 2
-    pad_bottom = target_h - new_h - pad_top
-    pad_left = (target_w - new_w) // 2
-    pad_right = target_w - new_w - pad_left
-    
-    # Ajouter le padding
-    if len(image.shape) == 3:
-        padded = cv2.copyMakeBorder(
-            resized, pad_top, pad_bottom, pad_left, pad_right,
-            cv2.BORDER_CONSTANT, value=[pad_color, pad_color, pad_color]
-        )
-    else:
-        padded = cv2.copyMakeBorder(
-            resized, pad_top, pad_bottom, pad_left, pad_right,
-            cv2.BORDER_CONSTANT, value=pad_color
-        )
-    
-    return padded, (scale, pad_top, pad_left)
+    result = base.astype(np.float32).copy()
 
+    # Zones exclues → noir
+    result[exclu] = 0
 
-def inverse_resize(bbox: Tuple, transform_params: Tuple, 
-                   original_size: Tuple[int, int]) -> Tuple:
-    """
-    Inverse la transformation de redimensionnement pour les coordonnées
-    
-    Args:
-        bbox: Bounding box (minr, minc, maxr, maxc)
-        transform_params: Paramètres de transformation (scale, pad_top, pad_left)
-        original_size: Taille originale (height, width)
-    
-    Returns:
-        Bounding box dans les coordonnées originales
-    """
-    scale, pad_top, pad_left = transform_params
-    minr, minc, maxr, maxc = bbox
-    
-    # Retirer le padding
-    minr = minr - pad_top
-    minc = minc - pad_left
-    maxr = maxr - pad_top
-    maxc = maxc - pad_left
-    
-    # Inverser le scaling
-    minr = int(minr / scale)
-    minc = int(minc / scale)
-    maxr = int(maxr / scale)
-    maxc = int(maxc / scale)
-    
-    # Clamp aux dimensions originales
-    h, w = original_size
-    minr = max(0, min(minr, h))
-    minc = max(0, min(minc, w))
-    maxr = max(0, min(maxr, h))
-    maxc = max(0, min(maxc, w))
-    
-    return (minr, minc, maxr, maxc)
+    # Fond dans masque → assombri 40%
+    result[fond]  = result[fond] * 0.40
+
+    # Soudure → bleu foncé, mélange 70%
+    bleu = np.array([0, 50, 210], dtype=np.float32)
+    result[soudure] = result[soudure] * 0.30 + bleu * 0.70
+
+    # Voids → rouge vif, mélange proportionnel à la confiance
+    if voids.any():
+        # Intensité variable selon la probabilité (rendu plus expressif)
+        conf = np.clip(void_prob[voids] / max(thr, 0.01), 1.0, 4.0)
+        r_ch = np.clip(180 + 20*(conf-1), 180, 255)
+        result[voids, 0] = r_ch          # R
+        result[voids, 1] = result[voids, 1] * 0.05   # G quasi nul
+        result[voids, 2] = result[voids, 2] * 0.05   # B quasi nul
+
+    result = np.clip(result, 0, 255).astype(np.uint8)
+
+    # Contour du masque d'inspection → vert
+    cnts, _ = cv2.findContours(inspection_mask.astype(np.uint8),
+                               cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(result, cnts, -1, (0, 200, 0), 2)
+
+    # Contours fins blancs autour des voids détectés
+    if voids.any():
+        vcnts, _ = cv2.findContours(voids.astype(np.uint8),
+                                    cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(result, vcnts, -1, (255, 200, 200), 1)
+
+    # Cadre + croix du plus gros void → bleu ciel épais
+    if analysis_results.get("largest_void_bbox") is not None:
+        minr, minc, maxr, maxc = analysis_results["largest_void_bbox"]
+        cv2.rectangle(result, (minc-2, minr-2), (maxc+2, maxr+2), (80, 220, 255), 3)
+        if analysis_results.get("largest_void_centroid"):
+            cy, cx = map(int, analysis_results["largest_void_centroid"])
+            cv2.line(result, (cx-14,cy), (cx+14,cy), (80,220,255), 2)
+            cv2.line(result, (cx,cy-14), (cx,cy+14), (80,220,255), 2)
+
+    return result
