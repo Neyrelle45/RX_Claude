@@ -297,9 +297,7 @@ Utile pour les images légèrement floues (0.3–0.8).
             st.caption("Le seuil sera calculé automatiquement à chaque analyse.")
         else:
             void_thr = st.slider("Seuil manuel", 0.01, 0.60, 0.10, 0.01,
-                                 help="Plus bas = plus sensible (plus de voids détectés).
-"
-                                      "Avec un petit dataset, 0.03–0.15 est souvent optimal.")
+                                 help="Plus bas = plus sensible. Avec un petit dataset, 0.03-0.15 est souvent optimal.")
 
     return contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo, void_thr
 
