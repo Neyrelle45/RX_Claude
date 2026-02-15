@@ -34,7 +34,8 @@ from tensorflow import keras
 
 from utils.void_analysis_utils import (
     preprocess_image, apply_mask, analyze_voids,
-    create_visualization, resize_with_aspect_ratio
+    create_visualization, resize_with_aspect_ratio,
+    remove_padding_and_restore
 )
 
 # ─── Page config ──────────────────────────────────────────────────────────────
@@ -170,11 +171,11 @@ def overlay_preview(image_rgb, mask_color):
 # ─── Process ──────────────────────────────────────────────────────────────────
 def process_image(image_rgb, mask_color, model,
                   contrast, brightness, clahe_clip, clahe_grid, sharpen,
-                  filter_geo):
+                  filter_geo, void_thr=None):
     H_img, W_img = image_rgb.shape[:2]
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
 
-    # Extraire masque binaire + aligner
+    # 1. Masque binaire aligné sur l'image originale
     if mask_color.ndim == 3:
         bin_mask = ((mask_color[:,:,1]>100) & (mask_color[:,:,2]<100) &
                     (mask_color[:,:,0]<100)).astype(np.uint8)
@@ -184,29 +185,31 @@ def process_image(image_rgb, mask_color, model,
         bin_mask = cv2.resize(bin_mask,(W_img,H_img),interpolation=cv2.INTER_NEAREST)
         bin_mask = (bin_mask>0).astype(np.uint8)
 
-    # Prétraitement avancé
+    # 2. Prétraitement
     processed = preprocess_advanced(gray, contrast, brightness,
                                     clahe_clip, clahe_grid, sharpen)
     masked = cv2.bitwise_and(processed, processed, mask=bin_mask)
 
-    # Inférence
+    # 3. Resize vers taille modèle EN CONSERVANT LE RATIO (padding noir)
     TH, TW = get_model_input_size(model)
-    resized, _ = resize_with_aspect_ratio(masked, (TH, TW))
-    if resized.shape[0]!=TH or resized.shape[1]!=TW:
-        resized = cv2.resize(resized,(TW,TH),interpolation=cv2.INTER_LINEAR)
-    arr = resized.astype(np.float32)/255.0
-    if arr.ndim==2:
-        inp = arr[np.newaxis,:,:,np.newaxis]
-    elif arr.ndim==3 and arr.shape[2]==3:
-        arr = cv2.cvtColor((arr*255).astype(np.uint8),cv2.COLOR_RGB2GRAY).astype(np.float32)/255.
-        inp = arr[np.newaxis,:,:,np.newaxis]
-    else:
-        inp = arr[np.newaxis,:,:,:]
+    # transform mémorise scale + padding pour inverser sans distorsion
+    resized, transform = resize_with_aspect_ratio(masked, (TH, TW))
+    # resize_with_aspect_ratio garantit déjà (TH,TW) — vérif de sécurité
+    assert resized.shape[:2] == (TH, TW), f"Shape inattendue: {resized.shape}"
 
-    pred     = model.predict(inp, verbose=0)[0]
-    pred_full = cv2.resize(pred,(W_img,H_img),interpolation=cv2.INTER_LINEAR)
+    # 4. Tenseur (1, TH, TW, 1)
+    arr = resized.astype(np.float32) / 255.0
+    inp = arr[np.newaxis, :, :, np.newaxis]   # toujours 2D gris ici
 
-    results   = analyze_voids(pred_full, bin_mask, filter_geo)
+    # 5. Prédiction → (TH, TW, 3) avec padding
+    pred_padded = model.predict(inp, verbose=0)[0]
+
+    # 6. Enlever le padding PUIS resize vers la taille originale
+    #    → aucune distorsion car on utilise exactement le même ratio
+    pred_full = remove_padding_and_restore(pred_padded, transform)
+
+    # 7. Analyse + visualisation
+    results   = analyze_voids(pred_full, bin_mask, filter_geo, void_threshold=void_thr)
     vis_image = create_visualization(image_rgb, pred_full, bin_mask, results)
     return vis_image, results, pred_full, processed
 
@@ -286,7 +289,19 @@ Utile pour les images légèrement floues (0.3–0.8).
         filter_geo = st.checkbox("Filtrer formes géométriques", value=True,
                                  help="Exclut vias et pistes (cercles/rectangles parfaits)")
 
-    return contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo
+        st.markdown("**Seuil de détection void**")
+        auto_thr = st.checkbox("Seuil adaptatif (recommandé)", value=True,
+                               help="Percentile 85 des probabilités dans la ROI — s'ajuste automatiquement")
+        if auto_thr:
+            void_thr = None
+            st.caption("Le seuil sera calculé automatiquement à chaque analyse.")
+        else:
+            void_thr = st.slider("Seuil manuel", 0.01, 0.60, 0.10, 0.01,
+                                 help="Plus bas = plus sensible (plus de voids détectés).
+"
+                                      "Avec un petit dataset, 0.03–0.15 est souvent optimal.")
+
+    return contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo, void_thr
 
 # ─── MASQUE ───────────────────────────────────────────────────────────────────
 def mask_panel(image_rgb):
@@ -469,7 +484,7 @@ def main():
 
     # On passe l'image de référence à la sidebar pour le preview live
     img_ref = st.session_state.get("img_ref_for_preview", None)
-    contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo = sidebar(img_ref)
+    contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo, void_thr = sidebar(img_ref)
 
     tab_a, tab_arch, tab_h = st.tabs(["📤 Analyse", "🗄️ Archive", "ℹ️ Instructions"])
 
@@ -507,7 +522,7 @@ def main():
                 vis_image, results, pred_raw, proc_img = process_image(
                     image_rgb, mask, model,
                     contrast, brightness, clahe_clip, clahe_grid, sharpen,
-                    filter_geo
+                    filter_geo, void_thr
                 )
             st.session_state["results"]   = results
             st.session_state["vis_image"] = vis_image
@@ -587,6 +602,7 @@ def main():
             def status(v,t1,t2):
                 return "✅ Bon" if v<t1 else ("⚠️ Acceptable" if v<t2 else "❌ Non conforme")
 
+            thr_used = results.get("void_threshold_used", 0.30)
             df = pd.DataFrame([
                 {"Métrique":"Taux de manque global",       "Valeur":f"{vr:.2f}%",
                  "Seuil conforme":"< 5%","Seuil acceptable":"< 15%",
@@ -601,6 +617,9 @@ def main():
                  "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
                 {"Métrique":"Surface voids",
                  "Valeur":f"{results['voids_area']:,} px",
+                 "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
+                {"Métrique":"Seuil void utilisé (adaptatif)",
+                 "Valeur":f"{thr_used:.3f}",
                  "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
             ])
             st.dataframe(df, use_container_width=True, hide_index=True)
