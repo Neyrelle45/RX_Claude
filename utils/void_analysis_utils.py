@@ -171,6 +171,7 @@ def analyze_voids(prediction, inspection_mask,
                   void_threshold=None,
                   gray_image=None,
                   sensitivity=50,
+                  min_void_px=80,
                   solder_threshold=None):
     """
     Analyse hybride :
@@ -195,7 +196,8 @@ def analyze_voids(prediction, inspection_mask,
     # ── 2. Voids via seuillage physique ───────────────────────────────────────
     if gray_image is not None and solder_zone.any():
         void_mask, void_thr = detect_voids_threshold(
-            gray_image, solder_zone, sensitivity=sensitivity)
+            gray_image, solder_zone, sensitivity=sensitivity,
+            min_void_px=min_void_px)
     else:
         # Fallback IA si pas d'image grise
         vp  = prediction[:, :, 1]
