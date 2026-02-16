@@ -299,21 +299,18 @@ Utile pour les images légèrement floues (0.3–0.8).
 
         st.divider()
         st.subheader("🎯 Détection voids")
-        st.caption("Les voids sont les zones les plus sombres dans la soudure.")
+        st.caption("Détection classique : CLAHE + seuil Otsu local dans le masque.")
         sensitivity = st.slider(
-            "Sensibilité (%)", 10, 70, 40, 5,
-            help="Percentile de coupure dans la zone soudure. "
-                 "40 = les 40% de pixels les plus sombres dans la soudure sont des voids. "
-                 "Augmentez si des voids sont manqués, diminuez si trop de faux positifs.")
+            "Ajustement seuil (niveaux)", -30, 30, 0, 5,
+            help="0 = seuil Otsu automatique (recommandé).\n"
+                 "Valeur négative → seuil plus bas → détecte plus de voids.\n"
+                 "Valeur positive → seuil plus haut → détecte moins de voids.\n"
+                 "Physique RX : voids = zones MOINS SOMBRES que la soudure dense.")
         min_void_px = st.slider(
-            "Taille min. void (px)", 10, 500, 80, 10,
-            help="Ignorer les blobs plus petits que cette surface. "
-                 "Augmentez pour filtrer le bruit.")
-        solder_thr_auto = st.checkbox("Seuil soudure adaptatif", value=True,
-                                      help="Laisse l'IA décider de la limite soudure/fond.")
-        solder_thr = None if solder_thr_auto else st.slider(
-            "Seuil soudure IA", 0.05, 0.80, 0.30, 0.05,
-            help="Seuil sur le canal 0 du modèle pour définir la zone soudure.")
+            "Taille min. void (px)", 50, 2000, 100, 50,
+            help="Blobs plus petits que cette surface sont ignorés.\n"
+                 "100px = défaut. Augmentez pour filtrer le bruit de fond.")
+        solder_thr = None   # non utilisé dans approche classique
 
     return contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo, sensitivity, min_void_px, solder_thr
 
