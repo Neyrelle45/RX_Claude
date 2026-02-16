@@ -171,7 +171,7 @@ def overlay_preview(image_rgb, mask_color):
 # ─── Process ──────────────────────────────────────────────────────────────────
 def process_image(image_rgb, mask_color, model,
                   contrast, brightness, clahe_clip, clahe_grid, sharpen,
-                  filter_geo, void_thr=None):
+                  filter_geo, sensitivity=40, min_void_px=80, solder_thr=None):
     H_img, W_img = image_rgb.shape[:2]
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
 
@@ -209,7 +209,15 @@ def process_image(image_rgb, mask_color, model,
     pred_full = remove_padding_and_restore(pred_padded, transform)
 
     # 7. Analyse + visualisation
-    results   = analyze_voids(pred_full, bin_mask, filter_geo, void_threshold=void_thr)
+    # Image grise prétraitée (nécessaire pour le seuillage physique des voids)
+    gray_proc = preprocess_advanced(
+        cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY),
+        contrast, brightness, clahe_clip, clahe_grid, sharpen)
+    results   = analyze_voids(pred_full, bin_mask,
+                              gray_image=gray_proc,
+                              sensitivity=sensitivity,
+                              min_void_px=min_void_px,
+                              solder_threshold=solder_thr)
     vis_image = create_visualization(image_rgb, pred_full, bin_mask, results)
     return vis_image, results, pred_full, processed
 
@@ -289,17 +297,25 @@ Utile pour les images légèrement floues (0.3–0.8).
         filter_geo = st.checkbox("Filtrer formes géométriques", value=True,
                                  help="Exclut vias et pistes (cercles/rectangles parfaits)")
 
-        st.markdown("**Seuil de détection void**")
-        auto_thr = st.checkbox("Seuil adaptatif (recommandé)", value=True,
-                               help="Percentile 85 des probabilités dans la ROI — s'ajuste automatiquement")
-        if auto_thr:
-            void_thr = None
-            st.caption("Le seuil sera calculé automatiquement à chaque analyse.")
-        else:
-            void_thr = st.slider("Seuil manuel", 0.01, 0.60, 0.10, 0.01,
-                                 help="Plus bas = plus sensible. Avec un petit dataset, 0.03-0.15 est souvent optimal.")
+        st.divider()
+        st.subheader("🎯 Détection voids")
+        st.caption("Les voids sont les zones les plus sombres dans la soudure.")
+        sensitivity = st.slider(
+            "Sensibilité (%)", 10, 70, 40, 5,
+            help="Percentile de coupure dans la zone soudure. "
+                 "40 = les 40% de pixels les plus sombres dans la soudure sont des voids. "
+                 "Augmentez si des voids sont manqués, diminuez si trop de faux positifs.")
+        min_void_px = st.slider(
+            "Taille min. void (px)", 10, 500, 80, 10,
+            help="Ignorer les blobs plus petits que cette surface. "
+                 "Augmentez pour filtrer le bruit.")
+        solder_thr_auto = st.checkbox("Seuil soudure adaptatif", value=True,
+                                      help="Laisse l'IA décider de la limite soudure/fond.")
+        solder_thr = None if solder_thr_auto else st.slider(
+            "Seuil soudure IA", 0.05, 0.80, 0.30, 0.05,
+            help="Seuil sur le canal 0 du modèle pour définir la zone soudure.")
 
-    return contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo, void_thr
+    return contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo, sensitivity, min_void_px, solder_thr
 
 # ─── MASQUE ───────────────────────────────────────────────────────────────────
 def mask_panel(image_rgb):
@@ -375,17 +391,16 @@ def show_color_legend():
     st.markdown("""
 <div class="legend-box">
   <div class="legend-item">
-    <div class="swatch" style="background:#0000ff"></div>
-    <span><b>Bleu foncé</b> — Soudure détectée (probabilité canal 0 &gt; 0.5)</span>
+    <div class="swatch" style="background:#22aa44"></div>
+    <span><b>Vert</b> — Soudure présente (zone inspectée sans manque)</span>
   </div>
   <div class="legend-item">
-    <div class="swatch" style="background:#ff0000"></div>
-    <span><b>Rouge</b> — Void / manque de soudure (probabilité canal 1 &gt; 0.5)</span>
+    <div class="swatch" style="background:#e61414"></div>
+    <span><b>Rouge vif</b> — Void / manque de soudure (zone la plus sombre dans la soudure)</span>
   </div>
   <div class="legend-item">
-    <div class="swatch" style="background:#87ffff;border:1px solid #aaa"></div>
-    <span><b>Cadre bleu ciel épais</b> — Contour + centre du plus gros void intérieur
-    (excluant les voids touchant le bord du masque)</span>
+    <div class="swatch" style="background:#50dcff;border:1px solid #aaa"></div>
+    <span><b>Cadre bleu ciel</b> — Contour + centre du plus gros void intérieur</span>
   </div>
   <div class="legend-item">
     <div class="swatch" style="background:#111;border:1px solid #888"></div>
@@ -482,7 +497,7 @@ def main():
 
     # On passe l'image de référence à la sidebar pour le preview live
     img_ref = st.session_state.get("img_ref_for_preview", None)
-    contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo, void_thr = sidebar(img_ref)
+    contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo, sensitivity, min_void_px, solder_thr = sidebar(img_ref)
 
     tab_a, tab_arch, tab_h = st.tabs(["📤 Analyse", "🗄️ Archive", "ℹ️ Instructions"])
 
@@ -520,7 +535,7 @@ def main():
                 vis_image, results, pred_raw, proc_img = process_image(
                     image_rgb, mask, model,
                     contrast, brightness, clahe_clip, clahe_grid, sharpen,
-                    filter_geo, void_thr
+                    filter_geo, sensitivity, min_void_px, solder_thr
                 )
             st.session_state["results"]   = results
             st.session_state["vis_image"] = vis_image
@@ -600,7 +615,6 @@ def main():
             def status(v,t1,t2):
                 return "✅ Bon" if v<t1 else ("⚠️ Acceptable" if v<t2 else "❌ Non conforme")
 
-            thr_used = results.get("void_threshold_used", 0.30)
             df = pd.DataFrame([
                 {"Métrique":"Taux de manque global",       "Valeur":f"{vr:.2f}%",
                  "Seuil conforme":"< 5%","Seuil acceptable":"< 15%",
@@ -613,11 +627,14 @@ def main():
                 {"Métrique":"Surface inspectée",
                  "Valeur":f"{results['total_inspection_area']:,} px",
                  "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
+                {"Métrique":"Surface soudure",
+                 "Valeur":f"{results.get('solder_area',results.get('voids_area',0)):,} px",
+                 "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
                 {"Métrique":"Surface voids",
                  "Valeur":f"{results['voids_area']:,} px",
                  "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
-                {"Métrique":"Seuil void utilisé (adaptatif)",
-                 "Valeur":f"{thr_used:.3f}",
+                {"Métrique":"Sensibilité utilisée",
+                 "Valeur":f"{results.get('void_threshold_used',0):.1f} px gris",
                  "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
             ])
             st.dataframe(df, use_container_width=True, hide_index=True)
