@@ -482,29 +482,17 @@ def main():
 
                 # ── Correction manuelle par clic ─────────────────────────────
                 st.divider()
-                st.markdown("**✏️ Correction manuelle**")
+                st.markdown("**✏️ Correction manuelle — cliquez directement sur l'image**")
 
                 void_mask_edit = st.session_state["results"].get("void_mask")
                 if void_mask_edit is not None:
                     if "manual_overrides" not in st.session_state:
                         st.session_state["manual_overrides"] = []
 
-                    # Taille d'affichage fixe : 700px de large
-                    # Toutes les coordonnées sont en pixels de l'image NATIVE
-                    # (void_mask_edit a exactement la même taille que image_rgb)
                     _H_nat, _W_nat = void_mask_edit.shape[:2]
+                    # Taille d'affichage fixe 700px large
                     _DISP_W = 700
                     _DISP_H = int(_H_nat * _DISP_W / max(_W_nat, 1))
-
-                    # Redimensionner l'image analysée à la taille d'affichage fixe
-                    import base64 as _b64mod
-                    from PIL import Image as _PIL2
-                    _vis_resized = cv2.resize(
-                        st.session_state["vis_image"].astype(np.uint8),
-                        (_DISP_W, _DISP_H), interpolation=cv2.INTER_AREA)
-                    _vbuf = io.BytesIO()
-                    _PIL2.fromarray(_vis_resized).save(_vbuf, format="PNG")
-                    _vb64 = _b64mod.b64encode(_vbuf.getvalue()).decode()
 
                     ov_action = st.radio(
                         "Mode :",
@@ -512,101 +500,48 @@ def main():
                          "✅ Ajouter void  (clic vert→rouge)"],
                         horizontal=True, key="ov_action")
 
-                    # Initialiser coords dans session_state
-                    if "click_x" not in st.session_state:
-                        st.session_state["click_x"] = 0
-                    if "click_y" not in st.session_state:
-                        st.session_state["click_y"] = 0
+                    # Redimensionner l'image pour affichage
+                    from PIL import Image as _PIL2
+                    _vis_pil = _PIL2.fromarray(
+                        st.session_state["vis_image"].astype(np.uint8)
+                    ).resize((_DISP_W, _DISP_H), _PIL2.LANCZOS)
 
-                    # ── Image cliquable ───────────────────────────────────────
-                    # Le JS écrit les coords dans deux st.text_input cachés
-                    # qui déclenchent un st.rerun via on_change → remplissage auto
-                    # des number_input X/Y.
-
-                    # Champs cachés pour recevoir les coords du JS
-                    _raw_x = st.text_input("_cx", value=str(st.session_state["click_x"]),
-                                           label_visibility="collapsed", key="_raw_cx")
-                    _raw_y = st.text_input("_cy", value=str(st.session_state["click_y"]),
-                                           label_visibility="collapsed", key="_raw_cy")
+                    # streamlit_image_coordinates : clic natif → coords display
                     try:
-                        _qx = int(np.clip(int(_raw_x), 0, _W_nat-1))
-                        _qy = int(np.clip(int(_raw_y), 0, _H_nat-1))
-                    except Exception:
-                        _qx, _qy = 0, 0
+                        from streamlit_image_coordinates import streamlit_image_coordinates as _sic
+                        _click = _sic(_vis_pil, key="img_click")
+                    except ImportError:
+                        _click = None
+                        st.image(_vis_pil, use_container_width=False, width=_DISP_W)
+                        st.warning("Package streamlit-image-coordinates manquant.")
 
-                    click_html = f"""<!DOCTYPE html>
-<html><head><style>
-body{{margin:0;padding:0;overflow:hidden;background:#111;}}
-#wrap{{position:relative;width:{_DISP_W}px;height:{_DISP_H}px;display:inline-block;}}
-img{{display:block;cursor:crosshair;border:2px solid #555;box-sizing:border-box;}}
-#tip{{position:absolute;top:6px;left:6px;background:rgba(0,0,0,.80);color:#fff;
-     padding:3px 10px;border-radius:3px;font:13px monospace;pointer-events:none;}}
-</style></head><body>
-<div id="wrap">
-  <img id="vi" src="data:image/png;base64,{_vb64}"
-       width="{_DISP_W}" height="{_DISP_H}"
-       onmousemove="mv(event)" onclick="ck(event)"/>
-  <div id="tip">🖱 Survolez → X Y &nbsp;|&nbsp; Cliquez → auto-remplissage ↓</div>
-</div>
-<script>
-var img=document.getElementById("vi"), tip=document.getElementById("tip");
-var NW={_W_nat}, NH={_H_nat}, DW={_DISP_W}, DH={_DISP_H};
-function toNative(e){{
-  var r=img.getBoundingClientRect();
-  return [Math.round((e.clientX-r.left)*NW/DW),
-          Math.round((e.clientY-r.top )*NH/DH)];
-}}
-function mv(e){{ var c=toNative(e); tip.textContent="X="+c[0]+"  Y="+c[1]; }}
-function setField(testid, val){{
-  var wrap=window.parent.document.querySelector('[data-testid="'+testid+'"]');
-  if(!wrap) return false;
-  var inp=wrap.querySelector("input");
-  if(!inp) return false;
-  var setter=Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,"value");
-  setter.set.call(inp, String(val));
-  inp.dispatchEvent(new Event("input",{{bubbles:true}}));
-  inp.dispatchEvent(new Event("change",{{bubbles:true}}));
-  return true;
-}}
-function ck(e){{
-  var c=toNative(e);
-  tip.style.background="rgba(0,100,20,.90)";
-  tip.textContent="✔ X="+c[0]+"  Y="+c[1]+" → rempli ci-dessous";
-  // Écrire dans les champs cachés (stTextInput avec key _raw_cx/_raw_cy)
-  var ok1=setField("stTextInput-_raw_cx", c[0]);
-  var ok2=setField("stTextInput-_raw_cy", c[1]);
-  if(!ok1||!ok2){{
-    // Fallback : cibler par label hidden
-    var all=window.parent.document.querySelectorAll('input[type="text"]');
-    all.forEach(function(inp){{
-      var p=inp.closest('[data-testid="stTextInput"]');
-      if(!p) return;
-      var k=p.getAttribute("data-key")||"";
-      if(k==="_raw_cx"){{ var s=Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,"value"); s.set.call(inp,String(c[0])); inp.dispatchEvent(new Event("input",{{bubbles:true}})); inp.dispatchEvent(new Event("change",{{bubbles:true}})); }}
-      if(k==="_raw_cy"){{ var s=Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,"value"); s.set.call(inp,String(c[1])); inp.dispatchEvent(new Event("input",{{bubbles:true}})); inp.dispatchEvent(new Event("change",{{bubbles:true}})); }}
-    }});
-  }}
-}}
-</script>
-</body></html>"""
-                    st.components.v1.html(click_html, height=_DISP_H + 8, scrolling=False)
-                    st.caption("📌 Après clic : les coordonnées ci-dessous se mettent à jour. Si non, saisissez-les manuellement.")
+                    # Convertir coords display → natives
+                    if _click is not None:
+                        _dx = int(np.clip(_click["x"], 0, _DISP_W - 1))
+                        _dy = int(np.clip(_click["y"], 0, _DISP_H - 1))
+                        _qx = int(_dx * _W_nat / _DISP_W)
+                        _qy = int(_dy * _H_nat / _DISP_H)
+                        # Stocker le dernier clic valide
+                        st.session_state["click_x"] = _qx
+                        st.session_state["click_y"] = _qy
+                    else:
+                        _qx = st.session_state.get("click_x", 0)
+                        _qy = st.session_state.get("click_y", 0)
 
-                    _kc1,_kc2,_kc3 = st.columns([2,2,3])
-                    with _kc1:
-                        ov_x = st.number_input("X (px)", 0, _W_nat-1,
-                                               value=_qx, key="ov_x")
-                    with _kc2:
-                        ov_y = st.number_input("Y (px)", 0, _H_nat-1,
-                                               value=_qy, key="ov_y")
-                    with _kc3:
-                        st.write("")
-                        _bc1,_bc2 = st.columns(2)
-                        with _bc1:
-                            do_apply = st.button("✅ Appliquer", use_container_width=True)
-                        with _bc2:
-                            do_reset = st.button("🔄 Réinitialiser", use_container_width=True,
-                                                  type="secondary")
+                    # Afficher les coords du dernier clic + boutons action
+                    if _click is not None or st.session_state.get("click_x", 0) > 0 or st.session_state.get("click_y", 0) > 0:
+                        st.caption(f"📍 Dernier clic : X={_qx}  Y={_qy} (pixels natifs)")
+
+                    _bc1, _bc2 = st.columns(2)
+                    with _bc1:
+                        do_apply = st.button("✅ Appliquer au point cliqué",
+                                             use_container_width=True,
+                                             disabled=(_click is None and st.session_state.get("click_x",0)==0))
+                    with _bc2:
+                        do_reset = st.button("🔄 Réinitialiser", use_container_width=True,
+                                              type="secondary")
+                    # Alias pour le code do_apply
+                    ov_x, ov_y = _qx, _qy
 
                     if do_apply:
                         from skimage import measure as _meas2
