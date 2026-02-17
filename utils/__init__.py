@@ -9,7 +9,10 @@ from .void_analysis_utils import (
     create_visualization,
     resize_with_aspect_ratio,
     remove_padding_and_restore,
-    filter_geometric_shapes
+    filter_geometric_shapes,
+    detect_solder_zone,
+    detect_voids_threshold,
+    smart_add_void,
 )
 
 __all__ = [
@@ -19,7 +22,12 @@ __all__ = [
     'create_visualization',
     'resize_with_aspect_ratio',
     'remove_padding_and_restore',
-    'filter_geometric_shapes'
+    'filter_geometric_shapes',
+    'detect_solder_zone',
+    'detect_voids_threshold',
+    'smart_add_void',
 ]
+
+
 
 
