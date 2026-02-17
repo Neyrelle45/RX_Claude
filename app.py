@@ -518,9 +518,22 @@ def main():
                     if "click_y" not in st.session_state:
                         st.session_state["click_y"] = 0
 
-                    # ── Image cliquable : taille fixe, coords renvoyées via query_params ──
-                    # Le JS calcule les coords en pixels NATIFS et les écrit dans l'URL.
-                    # Streamlit relit l'URL à chaque rerun → valeur auto dans number_input.
+                    # ── Image cliquable ───────────────────────────────────────
+                    # Le JS écrit les coords dans deux st.text_input cachés
+                    # qui déclenchent un st.rerun via on_change → remplissage auto
+                    # des number_input X/Y.
+
+                    # Champs cachés pour recevoir les coords du JS
+                    _raw_x = st.text_input("_cx", value=str(st.session_state["click_x"]),
+                                           label_visibility="collapsed", key="_raw_cx")
+                    _raw_y = st.text_input("_cy", value=str(st.session_state["click_y"]),
+                                           label_visibility="collapsed", key="_raw_cy")
+                    try:
+                        _qx = int(np.clip(int(_raw_x), 0, _W_nat-1))
+                        _qy = int(np.clip(int(_raw_y), 0, _H_nat-1))
+                    except Exception:
+                        _qx, _qy = 0, 0
+
                     click_html = f"""<!DOCTYPE html>
 <html><head><style>
 body{{margin:0;padding:0;overflow:hidden;background:#111;}}
@@ -533,7 +546,7 @@ img{{display:block;cursor:crosshair;border:2px solid #555;box-sizing:border-box;
   <img id="vi" src="data:image/png;base64,{_vb64}"
        width="{_DISP_W}" height="{_DISP_H}"
        onmousemove="mv(event)" onclick="ck(event)"/>
-  <div id="tip">🖱 Survolez → X Y &nbsp;|&nbsp; Cliquez → coordonnées auto</div>
+  <div id="tip">🖱 Survolez → X Y &nbsp;|&nbsp; Cliquez → auto-remplissage ↓</div>
 </div>
 <script>
 var img=document.getElementById("vi"), tip=document.getElementById("tip");
@@ -543,38 +556,41 @@ function toNative(e){{
   return [Math.round((e.clientX-r.left)*NW/DW),
           Math.round((e.clientY-r.top )*NH/DH)];
 }}
-function mv(e){{
-  var c=toNative(e);
-  tip.textContent="X="+c[0]+"  Y="+c[1];
+function mv(e){{ var c=toNative(e); tip.textContent="X="+c[0]+"  Y="+c[1]; }}
+function setField(testid, val){{
+  var wrap=window.parent.document.querySelector('[data-testid="'+testid+'"]');
+  if(!wrap) return false;
+  var inp=wrap.querySelector("input");
+  if(!inp) return false;
+  var setter=Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,"value");
+  setter.set.call(inp, String(val));
+  inp.dispatchEvent(new Event("input",{{bubbles:true}}));
+  inp.dispatchEvent(new Event("change",{{bubbles:true}}));
+  return true;
 }}
 function ck(e){{
   var c=toNative(e);
   tip.style.background="rgba(0,100,20,.90)";
-  tip.textContent="✔ X="+c[0]+"  Y="+c[1]+"  (coords copiées ↓)";
-  // Écrire dans l'URL parent pour que Streamlit les relise au prochain rerun
-  try{{
-    var url=new URL(window.parent.location.href);
-    url.searchParams.set("cx",c[0]);
-    url.searchParams.set("cy",c[1]);
-    url.searchParams.set("ct",Date.now());
-    window.parent.history.replaceState(null,"",url.toString());
-    // Déclencher le rerun Streamlit : simuler une frappe dans n'importe quel input
-    var evts=window.parent.document.querySelectorAll('input[type="number"]');
-    if(evts.length>0){{
-      evts[0].dispatchEvent(new Event("change",{{bubbles:true}}));
-    }}
-  }}catch(ex){{
-    tip.textContent="✔ X="+c[0]+" Y="+c[1]+" (entrez manuellement ↓)";
+  tip.textContent="✔ X="+c[0]+"  Y="+c[1]+" → rempli ci-dessous";
+  // Écrire dans les champs cachés (stTextInput avec key _raw_cx/_raw_cy)
+  var ok1=setField("stTextInput-_raw_cx", c[0]);
+  var ok2=setField("stTextInput-_raw_cy", c[1]);
+  if(!ok1||!ok2){{
+    // Fallback : cibler par label hidden
+    var all=window.parent.document.querySelectorAll('input[type="text"]');
+    all.forEach(function(inp){{
+      var p=inp.closest('[data-testid="stTextInput"]');
+      if(!p) return;
+      var k=p.getAttribute("data-key")||"";
+      if(k==="_raw_cx"){{ var s=Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,"value"); s.set.call(inp,String(c[0])); inp.dispatchEvent(new Event("input",{{bubbles:true}})); inp.dispatchEvent(new Event("change",{{bubbles:true}})); }}
+      if(k==="_raw_cy"){{ var s=Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,"value"); s.set.call(inp,String(c[1])); inp.dispatchEvent(new Event("input",{{bubbles:true}})); inp.dispatchEvent(new Event("change",{{bubbles:true}})); }}
+    }});
   }}
 }}
 </script>
 </body></html>"""
                     st.components.v1.html(click_html, height=_DISP_H + 8, scrolling=False)
-
-                    # Lire coords depuis URL query params (mis à jour par le clic JS)
-                    _qp = st.query_params
-                    _qx = int(np.clip(int(_qp.get("cx", st.session_state["click_x"])), 0, _W_nat-1))
-                    _qy = int(np.clip(int(_qp.get("cy", st.session_state["click_y"])), 0, _H_nat-1))
+                    st.caption("📌 Après clic : les coordonnées ci-dessous se mettent à jour. Si non, saisissez-les manuellement.")
 
                     _kc1,_kc2,_kc3 = st.columns([2,2,3])
                     with _kc1:
