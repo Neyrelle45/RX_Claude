@@ -176,11 +176,21 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
     cleaned = filled.astype(np.uint8)
 
     # ── 5. Filtre taille + forme ──────────────────────────────────────────────
-    # Rejette automatiquement : barres, lignes, rectangles allongés
-    # Conserve  : ronds, ovales, blobs irréguliers, croissants
-    labeled     = measure.label(cleaned, connectivity=2)
-    filtered    = np.zeros_like(cleaned)
-    total_mask  = int(roi_mask.sum()) if roi_mask.sum() > 0 else 1
+    # Rejette : barres, lignes, rectangles, blobs géants
+    # Conserve: ronds, ovales, blobs irréguliers, croissants
+    labeled = measure.label(cleaned, connectivity=2)
+    filtered = np.zeros_like(cleaned)
+
+    # Précalculer les composants connexes du masque (les "pads" individuels)
+    # pour comparer chaque void à la surface de SON composant parent
+    msk_lab = measure.label(roi_mask.astype(np.uint8), connectivity=2)
+    total_mask = int(roi_mask.sum()) if roi_mask.sum() > 0 else 1
+    min_comp = total_mask * 0.01  # ignorer les fragments < 1% du total
+    comp_sizes = {}
+    for mr in measure.regionprops(msk_lab):
+        if mr.area >= min_comp:
+            comp_sizes[mr.label] = mr.area
+
     for r in measure.regionprops(labeled):
         if r.area < min_void_px:
             continue
@@ -188,19 +198,25 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
         mni = r.axis_minor_length if hasattr(r, 'axis_minor_length') else r.minor_axis_length
         if maj == 0:
             continue
-        ar   = mni / maj                                    # 1=rond, 0=ligne
-        circ = 4 * np.pi * r.area / (r.perimeter ** 2 + 1e-6)  # 1=cercle
-        ecc  = r.eccentricity                               # 0=rond, 1=droite
+        ar   = mni / maj
+        circ = 4 * np.pi * r.area / (r.perimeter ** 2 + 1e-6)
+        ecc  = r.eccentricity
+
+        # Taille relative au composant parent (pad auquel ce void appartient)
+        blob_comps = msk_lab[labeled == r.label]
+        uniq, cnt  = np.unique(blob_comps[blob_comps > 0], return_counts=True)
+        if len(uniq):
+            parent_size = comp_sizes.get(int(uniq[np.argmax(cnt)]), total_mask)
+        else:
+            parent_size = total_mask
+        ratio_local = r.area / max(parent_size, 1)
 
         # ── Rejets automatiques ───────────────────────────────────────────────
-        # 1. Barre / ligne fine (bord de boîtier, piste métallique)
-        if ar < 0.25 and ecc > 0.95:
+        if ar < 0.25 and ecc > 0.95:        # barre / ligne fine
             continue
-        # 2. Rectangle plat (bord de pad, marquage)
-        if circ < 0.10 and ar < 0.30:
+        if circ < 0.10 and ar < 0.30:       # rectangle plat
             continue
-        # 3. Blob trop grand (> 20% masque) = fond ou artefact global
-        if r.area / total_mask > 0.20:
+        if ratio_local > 0.45:              # > 45% d'un pad = artefact global
             continue
         filtered[labeled == r.label] = 1
 
