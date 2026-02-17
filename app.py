@@ -20,7 +20,8 @@ _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from utils.void_analysis_utils import (
     preprocess_image, apply_mask, analyze_voids,
     create_visualization, resize_with_aspect_ratio,
-    remove_padding_and_restore, detect_voids_threshold
+    remove_padding_and_restore, detect_voids_threshold,
+    smart_add_void
 )
 
 # ─── Page config ──────────────────────────────────────────────────────────────
@@ -500,48 +501,69 @@ def main():
                          "✅ Ajouter void  (clic sur zone verte → devient rouge)"],
                         horizontal=True, key="ov_action")
 
-                    click_html = f"""<div style="position:relative;display:inline-block;width:100%;">
+                    # Ratio natif de l'image pour calculer la hauteur exacte
+                    _ih, _iw = void_mask_edit.shape[:2]
+                    _aspect = _ih / max(_iw, 1)
+
+                    click_html = f"""<!DOCTYPE html>
+<html><body style="margin:0;padding:0;background:#000;">
+<div id="wrap" style="position:relative;width:100%;">
   <img id="vis_img" src="data:image/png;base64,{_vb64}"
-       style="width:100%;cursor:crosshair;border:2px solid #555;border-radius:4px;"
+       style="width:100%;display:block;cursor:crosshair;
+              border:2px solid #555;border-radius:4px;box-sizing:border-box;"
        onmousemove="showCoords(event)" onclick="sendClick(event)"/>
-  <div id="tip" style="position:absolute;top:8px;left:8px;background:rgba(0,0,0,0.7);
-       color:#fff;padding:2px 8px;border-radius:3px;font-size:12px;pointer-events:none;">
-    Survolez → coordonnées · Cliquez → correction
+  <div id="tip" style="position:absolute;top:8px;left:8px;
+       background:rgba(0,0,0,0.75);color:#fff;padding:3px 10px;
+       border-radius:3px;font-size:13px;pointer-events:none;font-family:monospace;">
+    Survolez → coordonnées · Cliquez → marque le point
   </div>
 </div>
 <script>
-var img=document.getElementById("vis_img"),tip=document.getElementById("tip");
+var img=document.getElementById("vis_img");
+var tip=document.getElementById("tip");
+// Ajuster la hauteur de l'iframe parent dès que l'image est chargée
+function resizeParent(){{
+  var h = img.getBoundingClientRect().height + 20;
+  window.parent.document.querySelectorAll("iframe").forEach(function(fr){{
+    if(fr.contentWindow===window) fr.style.height = h+"px";
+  }});
+}}
+img.onload = resizeParent;
+window.addEventListener("resize", resizeParent);
+setTimeout(resizeParent, 300);
 function getCoords(e){{
   var r=img.getBoundingClientRect();
   return [Math.round((e.clientX-r.left)*img.naturalWidth/r.width),
           Math.round((e.clientY-r.top)*img.naturalHeight/r.height)];
 }}
 function showCoords(e){{
-  var c=getCoords(e); tip.textContent="X="+c[0]+"  Y="+c[1];
+  var c=getCoords(e);
+  tip.textContent="X="+c[0]+"  Y="+c[1];
 }}
 function sendClick(e){{
   var c=getCoords(e);
-  tip.textContent="✔ X="+c[0]+" Y="+c[1]+" — mettez à jour les champs ci-dessous et cliquez Appliquer";
-  // Mettre à jour les number_input de Streamlit
-  function setInput(label, val){{
-    var inputs=window.parent.document.querySelectorAll('input[type="number"]');
-    inputs.forEach(function(inp){{
-      var lbl=inp.closest('[data-testid="stNumberInput"]');
-      if(lbl && lbl.textContent.includes(label)){{
-        var nativeInput=Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,'value');
-        nativeInput.set.call(inp,val);
-        inp.dispatchEvent(new Event('input',{{bubbles:true}}));
+  tip.style.background="rgba(0,100,0,0.85)";
+  tip.textContent="✔ Clic → X="+c[0]+" Y="+c[1]+" — remplissez les champs et cliquez Appliquer";
+  function setVal(label, val){{
+    window.parent.document.querySelectorAll('[data-testid="stNumberInput"]').forEach(function(wrap){{
+      if(wrap.textContent.trim().startsWith(label)){{
+        var inp=wrap.querySelector("input");
+        var setter=Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,"value");
+        setter.set.call(inp, val);
+        inp.dispatchEvent(new Event("input",{{bubbles:true}}));
       }}
     }});
   }}
-  setInput("X (px)",c[0]); setInput("Y (px)",c[1]);
+  setVal("X (px)", c[0]);
+  setVal("Y (px)", c[1]);
 }}
-</script>"""
-                    # Hauteur = ratio H/W de l'image * largeur affichée (~880px) + marge
-                    _ih, _iw = void_mask_edit.shape[:2]
-                    _display_w = 880  # largeur approximative dans Streamlit layout=wide
-                    _display_h = int(_ih / _iw * _display_w) + 60
-                    st.components.v1.html(click_html, height=_display_h)
+</script>
+</body></html>"""
+                    # Hauteur initiale basée sur le ratio natif de l'image
+                    # resizeParent() JS l'ajuste ensuite automatiquement
+                    _display_w = 900
+                    _display_h = int(_aspect * _display_w) + 30
+                    st.components.v1.html(click_html, height=_display_h, scrolling=False)
 
                     _kc1,_kc2,_kc3 = st.columns([2,2,3])
                     with _kc1:
@@ -580,20 +602,23 @@ function sendClick(e){{
                             else:
                                 st.warning("⚠️ Aucun void à cet endroit — cliquez dans une zone rouge.")
                         else:
-                            _H,_W = void_now.shape
-                            _yy,_xx = np.ogrid[:_H,:_W]
-                            _rr = max(15, int(min(_H,_W)*0.015))
-                            _circ = ((_yy-ov_y)**2+(_xx-ov_x)**2) <= _rr**2
-                            _nv = void_now.copy(); _nv[_circ] = True
-                            st.session_state["results"]["void_mask"] = _nv
-                            st.session_state["manual_overrides"].append({"a":"add"})
+                            # Remplissage intelligent : trouve la région connexe claire
+                            # qui contient le point cliqué (jusqu'au contour naturel)
+                            _gray_raw = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
                             _bm2 = ((mask[:,:,1]>100)&(mask[:,:,2]<100)&
                                     (mask[:,:,0]<100)).astype(np.uint8) \
                                    if mask.ndim==3 else (mask>127).astype(np.uint8)
-                            st.session_state["vis_image"] = create_visualization(
-                                image_rgb, None, _bm2, st.session_state["results"])
-                            st.success(f"✅ Void ajouté (r={_rr}px)")
-                            st.rerun()
+                            _nv, _n_added = smart_add_void(
+                                _gray_raw, _bm2, void_now, ov_y, ov_x)
+                            if _n_added > 0:
+                                st.session_state["results"]["void_mask"] = _nv
+                                st.session_state["manual_overrides"].append({"a":"add"})
+                                st.session_state["vis_image"] = create_visualization(
+                                    image_rgb, None, _bm2, st.session_state["results"])
+                                st.success(f"✅ Void ajouté ({_n_added:,} px — rempli jusqu'au bord naturel)")
+                                st.rerun()
+                            else:
+                                st.warning("⚠️ Aucune zone claire détectée à cet endroit.")
 
                     if do_reset:
                         st.session_state["manual_overrides"] = []
