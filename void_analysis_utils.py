@@ -176,8 +176,11 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
     cleaned = filled.astype(np.uint8)
 
     # ── 5. Filtre taille + forme ──────────────────────────────────────────────
-    labeled  = measure.label(cleaned, connectivity=2)
-    filtered = np.zeros_like(cleaned)
+    # Rejette automatiquement : barres, lignes, rectangles allongés
+    # Conserve  : ronds, ovales, blobs irréguliers, croissants
+    labeled     = measure.label(cleaned, connectivity=2)
+    filtered    = np.zeros_like(cleaned)
+    total_mask  = int(roi_mask.sum()) if roi_mask.sum() > 0 else 1
     for r in measure.regionprops(labeled):
         if r.area < min_void_px:
             continue
@@ -185,12 +188,19 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
         mni = r.axis_minor_length if hasattr(r, 'axis_minor_length') else r.minor_axis_length
         if maj == 0:
             continue
-        ar   = mni / maj
-        circ = 4 * np.pi * r.area / (r.perimeter ** 2 + 1e-6)
-        ecc  = r.eccentricity
-        if ar < 0.15 and ecc > 0.98:   # barre tres fine
+        ar   = mni / maj                                    # 1=rond, 0=ligne
+        circ = 4 * np.pi * r.area / (r.perimeter ** 2 + 1e-6)  # 1=cercle
+        ecc  = r.eccentricity                               # 0=rond, 1=droite
+
+        # ── Rejets automatiques ───────────────────────────────────────────────
+        # 1. Barre / ligne fine (bord de boîtier, piste métallique)
+        if ar < 0.25 and ecc > 0.95:
             continue
-        if circ < 0.05 and ar < 0.20:  # rectangle plat
+        # 2. Rectangle plat (bord de pad, marquage)
+        if circ < 0.10 and ar < 0.30:
+            continue
+        # 3. Blob trop grand (> 20% masque) = fond ou artefact global
+        if r.area / total_mask > 0.20:
             continue
         filtered[labeled == r.label] = 1
 
