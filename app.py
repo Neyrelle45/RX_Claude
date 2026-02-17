@@ -512,56 +512,77 @@ def main():
                          "✅ Ajouter void  (clic vert→rouge)"],
                         horizontal=True, key="ov_action")
 
-                    # Widget HTML avec taille FIXE connue : _DISP_W x _DISP_H px
-                    # Les coordonnées affichées sont en pixels DISPLAY
-                    # → converties en pixels natifs au moment de l'Appliquer
+                    # Initialiser coords dans session_state
+                    if "click_x" not in st.session_state:
+                        st.session_state["click_x"] = 0
+                    if "click_y" not in st.session_state:
+                        st.session_state["click_y"] = 0
+
+                    # ── Image cliquable : taille fixe, coords renvoyées via query_params ──
+                    # Le JS calcule les coords en pixels NATIFS et les écrit dans l'URL.
+                    # Streamlit relit l'URL à chaque rerun → valeur auto dans number_input.
                     click_html = f"""<!DOCTYPE html>
-<html><body style="margin:0;padding:0;overflow:hidden;background:#111;">
-<div style="position:relative;width:{_DISP_W}px;height:{_DISP_H}px;">
+<html><head><style>
+body{{margin:0;padding:0;overflow:hidden;background:#111;}}
+#wrap{{position:relative;width:{_DISP_W}px;height:{_DISP_H}px;display:inline-block;}}
+img{{display:block;cursor:crosshair;border:2px solid #555;box-sizing:border-box;}}
+#tip{{position:absolute;top:6px;left:6px;background:rgba(0,0,0,.80);color:#fff;
+     padding:3px 10px;border-radius:3px;font:13px monospace;pointer-events:none;}}
+</style></head><body>
+<div id="wrap">
   <img id="vi" src="data:image/png;base64,{_vb64}"
        width="{_DISP_W}" height="{_DISP_H}"
-       style="display:block;cursor:crosshair;border:2px solid #555;box-sizing:border-box;"
        onmousemove="mv(event)" onclick="ck(event)"/>
-  <div id="tip" style="position:absolute;top:6px;left:6px;
-       background:rgba(0,0,0,0.78);color:#fff;padding:2px 9px;
-       border-radius:3px;font-size:13px;pointer-events:none;font-family:monospace;">
-    Survol → X Y · Clic → note les coords ci-dessous
-  </div>
+  <div id="tip">🖱 Survolez → X Y &nbsp;|&nbsp; Cliquez → coordonnées auto</div>
 </div>
 <script>
-var img=document.getElementById("vi"),tip=document.getElementById("tip");
-var NW={_W_nat},NH={_H_nat},DW={_DISP_W},DH={_DISP_H};
-function px(e){{
+var img=document.getElementById("vi"), tip=document.getElementById("tip");
+var NW={_W_nat}, NH={_H_nat}, DW={_DISP_W}, DH={_DISP_H};
+function toNative(e){{
   var r=img.getBoundingClientRect();
-  // Coordonnées dans l'espace display puis remap vers natif
-  var dx=e.clientX-r.left, dy=e.clientY-r.top;
-  return [Math.round(dx*NW/DW), Math.round(dy*NH/DH)];
+  return [Math.round((e.clientX-r.left)*NW/DW),
+          Math.round((e.clientY-r.top )*NH/DH)];
 }}
-function mv(e){{var c=px(e); tip.textContent="X="+c[0]+" Y="+c[1];}}
+function mv(e){{
+  var c=toNative(e);
+  tip.textContent="X="+c[0]+"  Y="+c[1];
+}}
 function ck(e){{
-  var c=px(e);
-  tip.style.background="rgba(0,80,0,0.88)";
-  tip.textContent="✔ X="+c[0]+" Y="+c[1]+" → entrez ces valeurs ci-dessous";
-  // Stocker dans sessionStorage pour que Streamlit puisse les lire
+  var c=toNative(e);
+  tip.style.background="rgba(0,100,20,.90)";
+  tip.textContent="✔ X="+c[0]+"  Y="+c[1]+"  (coords copiées ↓)";
+  // Écrire dans l'URL parent pour que Streamlit les relise au prochain rerun
   try{{
-    window.parent.sessionStorage.setItem("rx_click_x", c[0]);
-    window.parent.sessionStorage.setItem("rx_click_y", c[1]);
-  }}catch(ex){{}}
+    var url=new URL(window.parent.location.href);
+    url.searchParams.set("cx",c[0]);
+    url.searchParams.set("cy",c[1]);
+    url.searchParams.set("ct",Date.now());
+    window.parent.history.replaceState(null,"",url.toString());
+    // Déclencher le rerun Streamlit : simuler une frappe dans n'importe quel input
+    var evts=window.parent.document.querySelectorAll('input[type="number"]');
+    if(evts.length>0){{
+      evts[0].dispatchEvent(new Event("change",{{bubbles:true}}));
+    }}
+  }}catch(ex){{
+    tip.textContent="✔ X="+c[0]+" Y="+c[1]+" (entrez manuellement ↓)";
+  }}
 }}
 </script>
 </body></html>"""
-                    # Hauteur fixe = _DISP_H + petite marge
                     st.components.v1.html(click_html, height=_DISP_H + 8, scrolling=False)
 
-                    st.caption("📌 Après avoir cliqué sur l'image, entrez les coordonnées X et Y affichées dans l'infobulle ↑")
+                    # Lire coords depuis URL query params (mis à jour par le clic JS)
+                    _qp = st.query_params
+                    _qx = int(np.clip(int(_qp.get("cx", st.session_state["click_x"])), 0, _W_nat-1))
+                    _qy = int(np.clip(int(_qp.get("cy", st.session_state["click_y"])), 0, _H_nat-1))
 
                     _kc1,_kc2,_kc3 = st.columns([2,2,3])
                     with _kc1:
-                        ov_x = st.number_input("X (px)", 0,
-                                               _W_nat - 1, 0, key="ov_x")
+                        ov_x = st.number_input("X (px)", 0, _W_nat-1,
+                                               value=_qx, key="ov_x")
                     with _kc2:
-                        ov_y = st.number_input("Y (px)", 0,
-                                               _H_nat - 1, 0, key="ov_y")
+                        ov_y = st.number_input("Y (px)", 0, _H_nat-1,
+                                               value=_qy, key="ov_y")
                     with _kc3:
                         st.write("")
                         _bc1,_bc2 = st.columns(2)
