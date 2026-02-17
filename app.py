@@ -491,8 +491,8 @@ def main():
             st.success("✅ Analyse terminée!")
             st.subheader("4️⃣ Résultats")
 
-            tab_vis, tab_pre, tab_heat = st.tabs(
-                ["🖼️ Analyse", "🔬 Prétraitement", "🌡️ Heatmap"])
+            tab_vis, tab_pre, tab_cumul = st.tabs(
+                ["🖼️ Analyse", "🔬 Prétraitement", "📊 Cumul résultats"])
 
             # ── Vue Analyse ───────────────────────────────────────────────────
             with tab_vis:
@@ -563,8 +563,11 @@ function sendClick(e){{
   setInput("X (px)",c[0]); setInput("Y (px)",c[1]);
 }}
 </script>"""
-                    st.components.v1.html(click_html,
-                                          height=min(600, int(void_mask_edit.shape[0]*0.5)+40))
+                    # Hauteur = ratio H/W de l'image * largeur affichée (~880px) + marge
+                    _ih, _iw = void_mask_edit.shape[:2]
+                    _display_w = 880  # largeur approximative dans Streamlit layout=wide
+                    _display_h = int(_ih / _iw * _display_w) + 60
+                    st.components.v1.html(click_html, height=_display_h)
 
                     _kc1,_kc2,_kc3 = st.columns([2,2,3])
                     with _kc1:
@@ -648,31 +651,51 @@ function sendClick(e){{
                     if proc_img is not None:
                         st.image(proc_img, use_container_width=True, clamp=True)
 
-            # ── Heatmap ───────────────────────────────────────────────────────
-            with tab_heat:
-                show_heatmap_legend()
-                if pred_raw is None:
-                    st.info("ℹ️ L'analyse classique (sans IA) ne génère pas de heatmap. "
-                            "La heatmap était utilisée pour visualiser les prédictions du modèle U-Net.")
-                elif pred_raw is not None:
-                    hc1,hc2,hc3 = st.columns(3)
-                    specs = [
-                        (hc1, "Canal 0 — Soudure",       cv2.COLORMAP_BONE,   0),
-                        (hc2, "Canal 1 — Voids/Manques",  cv2.COLORMAP_HOT,    1),
-                        (hc3, "Canal 2 — Fond",           cv2.COLORMAP_WINTER, 2),
-                    ]
-                    for col, label, cmap, ch in specs:
-                        with col:
-                            st.markdown(f"**{label}**")
-                            ch_u8 = (pred_raw[:,:,ch]*255).astype(np.uint8)
-                            hm    = cv2.applyColorMap(ch_u8, cmap)
-                            hm    = cv2.cvtColor(hm, cv2.COLOR_BGR2RGB)
-                            bg    = cv2.resize(image_rgb,(hm.shape[1],hm.shape[0]))
-                            blend = cv2.addWeighted(bg,0.35,hm,0.65,0)
-                            st.image(blend, use_container_width=True)
-                            v = pred_raw[:,:,ch]
-                            st.caption(f"min={v.min():.3f} · max={v.max():.3f} "
-                                       f"· moy={v.mean():.3f}")
+            # ── Cumul résultats ───────────────────────────────────────────
+            with tab_cumul:
+                st.markdown("### 📊 Cumul des résultats archivés")
+                _archive = st.session_state.get("archive", [])
+                if not _archive:
+                    st.info("Aucun résultat archivé. Lancez une analyse puis cliquez **📥 Archiver**.")
+                else:
+                    # Tableau récapitulatif
+                    _rows = [{k:v for k,v in e.items() if k != "img_bytes"}
+                             for e in _archive]
+                    _df_cumul = pd.DataFrame(_rows)
+                    # Colonnes renommées lisiblement
+                    _df_cumul = _df_cumul.rename(columns={
+                        "fichier":"Fichier","ts":"Horodatage",
+                        "taux_%":"Taux global %","plus_gros_%":"Plus gros void %",
+                        "nb_voids":"Nb voids"})
+                    st.dataframe(_df_cumul, use_container_width=True, hide_index=True)
+
+                    # Graphique tendance si >= 2 entrées
+                    if len(_archive) >= 2:
+                        st.markdown("#### Évolution du taux de manque")
+                        _taux   = [e["taux_%"]    for e in _archive]
+                        _labels = [e["fichier"]   for e in _archive]
+                        _chart  = pd.DataFrame({
+                            "Image": _labels,
+                            "Taux global (%)":    [e["taux_%"]     for e in _archive],
+                            "Plus gros void (%)": [e["plus_gros_%"] for e in _archive],
+                        }).set_index("Image")
+                        st.line_chart(_chart)
+
+                    # Statistiques globales
+                    st.markdown("#### Statistiques globales")
+                    _taux_vals = [e["taux_%"] for e in _archive]
+                    _gros_vals = [e["plus_gros_%"] for e in _archive]
+                    _sc1,_sc2,_sc3,_sc4 = st.columns(4)
+                    _sc1.metric("Moyenne taux",   f"{sum(_taux_vals)/len(_taux_vals):.2f}%")
+                    _sc2.metric("Max taux",        f"{max(_taux_vals):.2f}%")
+                    _sc3.metric("Moy. gros void",  f"{sum(_gros_vals)/len(_gros_vals):.2f}%")
+                    _sc4.metric("Images analysées",str(len(_archive)))
+
+                    # Export CSV
+                    _csv_all = pd.DataFrame(_rows).to_csv(index=False).encode("utf-8")
+                    st.download_button("📥 Exporter tout en CSV", _csv_all,
+                                       "cumul_voids.csv","text/csv",
+                                       use_container_width=False)
 
             # ── Tableau métriques ─────────────────────────────────────────────
             st.subheader("📊 Résultats de l'analyse")
@@ -786,7 +809,7 @@ La **prévisualisation live** en bas de la sidebar se met à jour à chaque chan
 |--------|---------|
 | 🖼️ Analyse | Image originale vs analysée avec légende des couleurs |
 | 🔬 Prétraitement | Comparaison avant/après prétraitement |
-| 🌡️ Heatmap | Probabilités brutes du modèle par canal |
+| 📊 Cumul résultats | Tableau et graphes des analyses archivées |
 
 ### 6. Interprétation couleurs
 | Couleur | Signification |
