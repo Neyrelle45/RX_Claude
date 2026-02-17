@@ -12,30 +12,15 @@ from PIL import Image
 import streamlit as st
 import pandas as pd
 
-# ─── Auto-installation de TensorFlow ──────────────────────────────────────────
-@st.cache_resource(show_spinner=False)
-def _install_tensorflow():
-    try:
-        import tensorflow  # noqa: F401
-    except ImportError:
-        with st.spinner("⏳ Installation de TensorFlow (une seule fois, ~2 min)..."):
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install",
-                "tensorflow-cpu==2.13.0",
-                "--quiet", "--no-warn-script-location"
-            ])
-        st.cache_resource.clear()
-        st.rerun()
-
-_install_tensorflow()
-
-import tensorflow as tf
-from tensorflow import keras
+# ─── Imports utilitaires (détection 100% classique, sans TensorFlow) ──────────
+import sys as _sys
+import os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 
 from utils.void_analysis_utils import (
     preprocess_image, apply_mask, analyze_voids,
     create_visualization, resize_with_aspect_ratio,
-    remove_padding_and_restore
+    remove_padding_and_restore, detect_voids_threshold
 )
 
 # ─── Page config ──────────────────────────────────────────────────────────────
