@@ -482,96 +482,86 @@ def main():
 
                 # ── Correction manuelle par clic ─────────────────────────────
                 st.divider()
-                st.markdown("**✏️ Correction manuelle — cliquez sur l'image pour modifier un void**")
+                st.markdown("**✏️ Correction manuelle**")
 
                 void_mask_edit = st.session_state["results"].get("void_mask")
                 if void_mask_edit is not None:
                     if "manual_overrides" not in st.session_state:
                         st.session_state["manual_overrides"] = []
 
+                    # Taille d'affichage fixe : 700px de large
+                    # Toutes les coordonnées sont en pixels de l'image NATIVE
+                    # (void_mask_edit a exactement la même taille que image_rgb)
+                    _H_nat, _W_nat = void_mask_edit.shape[:2]
+                    _DISP_W = 700
+                    _DISP_H = int(_H_nat * _DISP_W / max(_W_nat, 1))
+
+                    # Redimensionner l'image analysée à la taille d'affichage fixe
                     import base64 as _b64mod
                     from PIL import Image as _PIL2
+                    _vis_resized = cv2.resize(
+                        st.session_state["vis_image"].astype(np.uint8),
+                        (_DISP_W, _DISP_H), interpolation=cv2.INTER_AREA)
                     _vbuf = io.BytesIO()
-                    _PIL2.fromarray(st.session_state["vis_image"].astype(np.uint8)).save(_vbuf, format="PNG")
+                    _PIL2.fromarray(_vis_resized).save(_vbuf, format="PNG")
                     _vb64 = _b64mod.b64encode(_vbuf.getvalue()).decode()
 
                     ov_action = st.radio(
-                        "Mode de clic :",
-                        ["❌ Supprimer void (clic sur zone rouge → devient vert)",
-                         "✅ Ajouter void  (clic sur zone verte → devient rouge)"],
+                        "Mode :",
+                        ["❌ Supprimer void (clic rouge→vert)",
+                         "✅ Ajouter void  (clic vert→rouge)"],
                         horizontal=True, key="ov_action")
 
-                    # Ratio natif de l'image pour calculer la hauteur exacte
-                    _ih, _iw = void_mask_edit.shape[:2]
-                    _aspect = _ih / max(_iw, 1)
-
+                    # Widget HTML avec taille FIXE connue : _DISP_W x _DISP_H px
+                    # Les coordonnées affichées sont en pixels DISPLAY
+                    # → converties en pixels natifs au moment de l'Appliquer
                     click_html = f"""<!DOCTYPE html>
-<html><body style="margin:0;padding:0;background:#000;">
-<div id="wrap" style="position:relative;width:100%;">
-  <img id="vis_img" src="data:image/png;base64,{_vb64}"
-       style="width:100%;display:block;cursor:crosshair;
-              border:2px solid #555;border-radius:4px;box-sizing:border-box;"
-       onmousemove="showCoords(event)" onclick="sendClick(event)"/>
-  <div id="tip" style="position:absolute;top:8px;left:8px;
-       background:rgba(0,0,0,0.75);color:#fff;padding:3px 10px;
+<html><body style="margin:0;padding:0;overflow:hidden;background:#111;">
+<div style="position:relative;width:{_DISP_W}px;height:{_DISP_H}px;">
+  <img id="vi" src="data:image/png;base64,{_vb64}"
+       width="{_DISP_W}" height="{_DISP_H}"
+       style="display:block;cursor:crosshair;border:2px solid #555;box-sizing:border-box;"
+       onmousemove="mv(event)" onclick="ck(event)"/>
+  <div id="tip" style="position:absolute;top:6px;left:6px;
+       background:rgba(0,0,0,0.78);color:#fff;padding:2px 9px;
        border-radius:3px;font-size:13px;pointer-events:none;font-family:monospace;">
-    Survolez → coordonnées · Cliquez → marque le point
+    Survol → X Y · Clic → note les coords ci-dessous
   </div>
 </div>
 <script>
-var img=document.getElementById("vis_img");
-var tip=document.getElementById("tip");
-// Ajuster la hauteur de l'iframe parent dès que l'image est chargée
-function resizeParent(){{
-  var h = img.getBoundingClientRect().height + 20;
-  window.parent.document.querySelectorAll("iframe").forEach(function(fr){{
-    if(fr.contentWindow===window) fr.style.height = h+"px";
-  }});
-}}
-img.onload = resizeParent;
-window.addEventListener("resize", resizeParent);
-setTimeout(resizeParent, 300);
-function getCoords(e){{
+var img=document.getElementById("vi"),tip=document.getElementById("tip");
+var NW={_W_nat},NH={_H_nat},DW={_DISP_W},DH={_DISP_H};
+function px(e){{
   var r=img.getBoundingClientRect();
-  return [Math.round((e.clientX-r.left)*img.naturalWidth/r.width),
-          Math.round((e.clientY-r.top)*img.naturalHeight/r.height)];
+  // Coordonnées dans l'espace display puis remap vers natif
+  var dx=e.clientX-r.left, dy=e.clientY-r.top;
+  return [Math.round(dx*NW/DW), Math.round(dy*NH/DH)];
 }}
-function showCoords(e){{
-  var c=getCoords(e);
-  tip.textContent="X="+c[0]+"  Y="+c[1];
-}}
-function sendClick(e){{
-  var c=getCoords(e);
-  tip.style.background="rgba(0,100,0,0.85)";
-  tip.textContent="✔ Clic → X="+c[0]+" Y="+c[1]+" — remplissez les champs et cliquez Appliquer";
-  function setVal(label, val){{
-    window.parent.document.querySelectorAll('[data-testid="stNumberInput"]').forEach(function(wrap){{
-      if(wrap.textContent.trim().startsWith(label)){{
-        var inp=wrap.querySelector("input");
-        var setter=Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,"value");
-        setter.set.call(inp, val);
-        inp.dispatchEvent(new Event("input",{{bubbles:true}}));
-      }}
-    }});
-  }}
-  setVal("X (px)", c[0]);
-  setVal("Y (px)", c[1]);
+function mv(e){{var c=px(e); tip.textContent="X="+c[0]+" Y="+c[1];}}
+function ck(e){{
+  var c=px(e);
+  tip.style.background="rgba(0,80,0,0.88)";
+  tip.textContent="✔ X="+c[0]+" Y="+c[1]+" → entrez ces valeurs ci-dessous";
+  // Stocker dans sessionStorage pour que Streamlit puisse les lire
+  try{{
+    window.parent.sessionStorage.setItem("rx_click_x", c[0]);
+    window.parent.sessionStorage.setItem("rx_click_y", c[1]);
+  }}catch(ex){{}}
 }}
 </script>
 </body></html>"""
-                    # Hauteur initiale basée sur le ratio natif de l'image
-                    # resizeParent() JS l'ajuste ensuite automatiquement
-                    _display_w = 900
-                    _display_h = int(_aspect * _display_w) + 30
-                    st.components.v1.html(click_html, height=_display_h, scrolling=False)
+                    # Hauteur fixe = _DISP_H + petite marge
+                    st.components.v1.html(click_html, height=_DISP_H + 8, scrolling=False)
+
+                    st.caption("📌 Après avoir cliqué sur l'image, entrez les coordonnées X et Y affichées dans l'infobulle ↑")
 
                     _kc1,_kc2,_kc3 = st.columns([2,2,3])
                     with _kc1:
                         ov_x = st.number_input("X (px)", 0,
-                                               int(void_mask_edit.shape[1])-1, 0, key="ov_x")
+                                               _W_nat - 1, 0, key="ov_x")
                     with _kc2:
                         ov_y = st.number_input("Y (px)", 0,
-                                               int(void_mask_edit.shape[0])-1, 0, key="ov_y")
+                                               _H_nat - 1, 0, key="ov_y")
                     with _kc3:
                         st.write("")
                         _bc1,_bc2 = st.columns(2)
@@ -584,41 +574,57 @@ function sendClick(e){{
                     if do_apply:
                         from skimage import measure as _meas2
                         void_now = st.session_state["results"]["void_mask"]
+                        _H_v, _W_v = void_now.shape[:2]
+                        # Clamp des coordonnées dans les bornes de l'image native
+                        _cx = int(np.clip(ov_x, 0, _W_v - 1))
+                        _cy = int(np.clip(ov_y, 0, _H_v - 1))
+                        # Masque binaire
+                        _bm2 = ((mask[:,:,1]>100)&(mask[:,:,2]<100)&
+                                (mask[:,:,0]<100)).astype(np.uint8) \
+                               if mask.ndim==3 else (mask>127).astype(np.uint8)
+
                         if "Supprimer" in ov_action:
                             _lab = _meas2.label(void_now.astype(np.uint8), connectivity=2)
-                            _bid = int(_lab[ov_y, ov_x])
+                            _bid = int(_lab[_cy, _cx])
                             if _bid > 0:
                                 _bpx = (_lab == _bid)
-                                _nv  = void_now.copy(); _nv[_bpx] = False
+                                _nv  = void_now.copy()
+                                _nv[_bpx] = False
                                 st.session_state["results"]["void_mask"] = _nv
                                 st.session_state["manual_overrides"].append({"a":"rm"})
-                                _bm2 = ((mask[:,:,1]>100)&(mask[:,:,2]<100)&
-                                        (mask[:,:,0]<100)).astype(np.uint8) \
-                                       if mask.ndim==3 else (mask>127).astype(np.uint8)
                                 st.session_state["vis_image"] = create_visualization(
                                     image_rgb, None, _bm2, st.session_state["results"])
                                 st.success(f"✅ Void supprimé ({_bpx.sum():,} px)")
                                 st.rerun()
                             else:
-                                st.warning("⚠️ Aucun void à cet endroit — cliquez dans une zone rouge.")
+                                # Debug : montrer la valeur du void_mask au point cliqué
+                                _in_mask = bool(_bm2[_cy, _cx] > 0)
+                                st.warning(
+                                    f"⚠️ Aucun void au pixel ({_cx},{_cy}). "
+                                    f"Dans le masque : {'✅' if _in_mask else '❌'}. "
+                                    f"Vérifiez que les coords affichées dans l'infobulle "
+                                    f"correspondent bien à une zone rouge.")
                         else:
-                            # Remplissage intelligent : trouve la région connexe claire
-                            # qui contient le point cliqué (jusqu'au contour naturel)
                             _gray_raw = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
-                            _bm2 = ((mask[:,:,1]>100)&(mask[:,:,2]<100)&
-                                    (mask[:,:,0]<100)).astype(np.uint8) \
-                                   if mask.ndim==3 else (mask>127).astype(np.uint8)
-                            _nv, _n_added = smart_add_void(
-                                _gray_raw, _bm2, void_now, ov_y, ov_x)
-                            if _n_added > 0:
-                                st.session_state["results"]["void_mask"] = _nv
-                                st.session_state["manual_overrides"].append({"a":"add"})
-                                st.session_state["vis_image"] = create_visualization(
-                                    image_rgb, None, _bm2, st.session_state["results"])
-                                st.success(f"✅ Void ajouté ({_n_added:,} px — rempli jusqu'au bord naturel)")
-                                st.rerun()
+                            # Vérifier que le point est dans le masque
+                            if _bm2[_cy, _cx] == 0:
+                                st.warning(f"⚠️ Le point ({_cx},{_cy}) est hors du masque (zone noire). "
+                                           f"Cliquez dans une zone verte ou rouge.")
                             else:
-                                st.warning("⚠️ Aucune zone claire détectée à cet endroit.")
+                                _nv, _n_added = smart_add_void(
+                                    _gray_raw, _bm2, void_now, _cy, _cx)
+                                if _n_added > 0:
+                                    st.session_state["results"]["void_mask"] = _nv
+                                    st.session_state["manual_overrides"].append({"a":"add"})
+                                    st.session_state["vis_image"] = create_visualization(
+                                        image_rgb, None, _bm2, st.session_state["results"])
+                                    st.success(
+                                        f"✅ Void ajouté ({_n_added:,} px)")
+                                    st.rerun()
+                                else:
+                                    st.warning(
+                                        f"⚠️ Pas de région claire au pixel ({_cx},{_cy}). "
+                                        f"Essayez un point plus au centre de la zone claire.")
 
                     if do_reset:
                         st.session_state["manual_overrides"] = []
