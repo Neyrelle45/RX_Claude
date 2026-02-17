@@ -169,13 +169,14 @@ def overlay_preview(image_rgb, mask_color):
     return result
 
 # ─── Process ──────────────────────────────────────────────────────────────────
-def process_image(image_rgb, mask_color, model,
+def process_image(image_rgb, mask_color,
                   contrast, brightness, clahe_clip, clahe_grid, sharpen,
-                  filter_geo, sensitivity=40, min_void_px=80, solder_thr=None):
+                  filter_geo, sensitivity=0, min_void_px=100):
+    """Analyse 100% classique — aucun modèle requis."""
     H_img, W_img = image_rgb.shape[:2]
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
 
-    # 1. Masque binaire aligné sur l'image originale
+    # 1. Masque binaire
     if mask_color.ndim == 3:
         bin_mask = ((mask_color[:,:,1]>100) & (mask_color[:,:,2]<100) &
                     (mask_color[:,:,0]<100)).astype(np.uint8)
@@ -185,41 +186,17 @@ def process_image(image_rgb, mask_color, model,
         bin_mask = cv2.resize(bin_mask,(W_img,H_img),interpolation=cv2.INTER_NEAREST)
         bin_mask = (bin_mask>0).astype(np.uint8)
 
-    # 2. Prétraitement
+    # 2. Prétraitement CLAHE
     processed = preprocess_advanced(gray, contrast, brightness,
                                     clahe_clip, clahe_grid, sharpen)
-    masked = cv2.bitwise_and(processed, processed, mask=bin_mask)
 
-    # 3. Resize vers taille modèle EN CONSERVANT LE RATIO (padding noir)
-    TH, TW = get_model_input_size(model)
-    # transform mémorise scale + padding pour inverser sans distorsion
-    resized, transform = resize_with_aspect_ratio(masked, (TH, TW))
-    # resize_with_aspect_ratio garantit déjà (TH,TW) — vérif de sécurité
-    assert resized.shape[:2] == (TH, TW), f"Shape inattendue: {resized.shape}"
-
-    # 4. Tenseur (1, TH, TW, 1)
-    arr = resized.astype(np.float32) / 255.0
-    inp = arr[np.newaxis, :, :, np.newaxis]   # toujours 2D gris ici
-
-    # 5. Prédiction → (TH, TW, 3) avec padding
-    pred_padded = model.predict(inp, verbose=0)[0]
-
-    # 6. Enlever le padding PUIS resize vers la taille originale
-    #    → aucune distorsion car on utilise exactement le même ratio
-    pred_full = remove_padding_and_restore(pred_padded, transform)
-
-    # 7. Analyse + visualisation
-    # Image grise prétraitée (nécessaire pour le seuillage physique des voids)
-    gray_proc = preprocess_advanced(
-        cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY),
-        contrast, brightness, clahe_clip, clahe_grid, sharpen)
-    results   = analyze_voids(pred_full, bin_mask,
-                              gray_image=gray_proc,
+    # 3. Analyse classique (CLAHE + Otsu local + filtre géométrique)
+    results   = analyze_voids(None, bin_mask,
+                              gray_image=processed,
                               sensitivity=sensitivity,
-                              min_void_px=min_void_px,
-                              solder_threshold=solder_thr)
-    vis_image = create_visualization(image_rgb, pred_full, bin_mask, results)
-    return vis_image, results, pred_full, processed
+                              min_void_px=min_void_px)
+    vis_image = create_visualization(image_rgb, None, bin_mask, results)
+    return vis_image, results, processed
 
 # ─── Preview prétraitement live ───────────────────────────────────────────────
 def preprocess_preview(image_rgb, contrast, brightness,
@@ -237,23 +214,6 @@ def sidebar(image_rgb_ref):
     """
     with st.sidebar:
         st.header("⚙️ Configuration")
-
-        # Modèle
-        st.subheader("🧠 Modèle")
-        up_model = st.file_uploader("Fichier modèle (.h5)", type=["h5"])
-        if up_model and st.button("🔄 Initialiser", use_container_width=True):
-            with st.spinner("Chargement…"):
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".h5") as tmp:
-                    tmp.write(up_model.getvalue()); tmp_path=tmp.name
-                model = load_model_from_path(tmp_path)
-                os.remove(tmp_path)
-                if model:
-                    st.session_state["model"] = model
-                    h,w = get_model_input_size(model)
-                    st.success(f"✅ Modèle chargé — entrée {h}×{w}")
-        if "model" in st.session_state:
-            h,w = get_model_input_size(st.session_state["model"])
-            st.caption(f"✅ Modèle actif · entrée {h}×{w} px")
 
         st.divider()
 
@@ -501,11 +461,6 @@ def main():
     # ══ ANALYSE ═══════════════════════════════════════════════════════════════
     with tab_a:
 
-        if "model" not in st.session_state:
-            st.info("⬅️ Chargez d'abord un modèle dans la barre latérale.")
-            st.stop()
-        model = st.session_state["model"]
-
         # 1. Image RX
         st.subheader("1️⃣ Charger l'image RX")
         up_img = st.file_uploader("Image RX (.png / .jpg / .jpeg)",
@@ -529,14 +484,14 @@ def main():
         st.subheader("3️⃣ Lancer l'analyse")
         if st.button("🚀 Analyser", type="primary", use_container_width=True):
             with st.spinner("🔄 Analyse en cours…"):
-                vis_image, results, pred_raw, proc_img = process_image(
-                    image_rgb, mask, model,
+                vis_image, results, proc_img = process_image(
+                    image_rgb, mask,
                     contrast, brightness, clahe_clip, clahe_grid, sharpen,
-                    filter_geo, sensitivity, min_void_px, solder_thr
+                    filter_geo, sensitivity, min_void_px
                 )
             st.session_state["results"]   = results
             st.session_state["vis_image"] = vis_image
-            st.session_state["pred_raw"]  = pred_raw
+            st.session_state["pred_raw"]  = None
             st.session_state["proc_img"]  = proc_img
             st.session_state["last_fname"]= up_img.name
 
@@ -583,7 +538,10 @@ def main():
             # ── Heatmap ───────────────────────────────────────────────────────
             with tab_heat:
                 show_heatmap_legend()
-                if pred_raw is not None:
+                if pred_raw is None:
+                    st.info("ℹ️ L'analyse classique (sans IA) ne génère pas de heatmap. "
+                            "La heatmap était utilisée pour visualiser les prédictions du modèle U-Net.")
+                elif pred_raw is not None:
                     hc1,hc2,hc3 = st.columns(3)
                     specs = [
                         (hc1, "Canal 0 — Soudure",       cv2.COLORMAP_BONE,   0),
