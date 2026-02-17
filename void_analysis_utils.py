@@ -129,27 +129,51 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
     k3  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,  3))
     k13 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
 
-    # Ouverture légère : supprime le bruit ponctuel
+    # Ouverture legere : supprime le bruit ponctuel
     cleaned = cv2.morphologyEx(void_raw.astype(np.uint8), cv2.MORPH_OPEN, k3)
-
-    # Fermeture forte : soude les fragments et bouche les trous de vias
+    # Fermeture : soude les fragments d'un meme void
     cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, k13)
 
-    # Remplissage des trous internes par flood-fill
-    # Un void circulaire avec des vias au centre a des cavites sombres dans son contour
-    # -> on remplit tout ce qui est entoure par du void
+    # ── Anti "fromage grignoté" : combler les encoches de vias ───────────────
+    # Principe : les vias créent de petites concavités sur le bord des voids.
+    # On détecte ces concavités via les défauts du hull convexe,
+    # et on comble uniquement celles dont la profondeur < max_via_depth px.
     labeled_tmp = measure.label(cleaned, connectivity=2)
     filled = np.zeros_like(cleaned)
     for r in measure.regionprops(labeled_tmp):
         blob = (labeled_tmp == r.label).astype(np.uint8)
-        h, w = blob.shape
-        padded = np.zeros((h + 2, w + 2), np.uint8)
-        padded[1:-1, 1:-1] = blob
-        flood = padded.copy()
-        cv2.floodFill(flood, None, (0, 0), 1)
-        interior = (flood[1:-1, 1:-1] == 0).astype(np.uint8)
-        filled += np.clip(blob + interior, 0, 1)
-    cleaned = np.clip(filled, 0, 1).astype(np.uint8)
+        cnts, _ = cv2.findContours(blob, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        if not cnts:
+            filled += blob
+            continue
+        cnt = max(cnts, key=cv2.contourArea)
+        # Remplissage des trous internes (flood-fill)
+        h2, w2 = blob.shape
+        pad = np.zeros((h2+2, w2+2), np.uint8)
+        pad[1:-1, 1:-1] = blob
+        fld = pad.copy()
+        cv2.floodFill(fld, None, (0,0), 1)
+        interior = (fld[1:-1, 1:-1] == 0).astype(np.uint8)
+        blob_filled = np.clip(blob + interior, 0, 1).astype(np.uint8)
+        # Défauts du hull : combler les petites encoches (vias)
+        if len(cnt) >= 5:
+            try:
+                hull_idx = cv2.convexHull(cnt, returnPoints=False)
+                defects  = cv2.convexityDefects(cnt, hull_idx)
+                if defects is not None:
+                    for defect in defects.reshape(-1, 4):
+                        s, e, f, depth_px = defect
+                        depth = depth_px / 256.0
+                        if depth < 30:   # encoche < 30px = via → combler
+                            start = tuple(cnt[s][0])
+                            end   = tuple(cnt[e][0])
+                            far   = tuple(cnt[f][0])
+                            tri   = np.array([start, end, far], dtype=np.int32)
+                            cv2.fillPoly(blob_filled, [tri], 1)
+            except Exception:
+                pass
+        filled = np.clip(filled + blob_filled, 0, 1)
+    cleaned = filled.astype(np.uint8)
 
     # ── 5. Filtre taille + forme ──────────────────────────────────────────────
     labeled  = measure.label(cleaned, connectivity=2)
