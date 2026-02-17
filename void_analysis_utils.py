@@ -273,8 +273,9 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
 def smart_add_void(gray_image, roi_mask, current_void_mask, click_y, click_x):
     """
     Ajoute un void en trouvant la région connexe CLAIRE qui contient le point cliqué.
-    Utilise le même seuil Otsu que la détection principale pour cohérence.
-    Remplit jusqu'au contour naturel de la zone claire (bord void/soudure).
+    Utilise le même seuil Otsu que la détection principale.
+    Si le blob est complexe (void+piste fusionnés), isole le pétale contenant le clic
+    via watershed par distance transform.
     """
     # Normalisation robuste identique à detect_voids_threshold
     vals_raw = gray_image[roi_mask > 0]
@@ -286,19 +287,15 @@ def smart_add_void(gray_image, roi_mask, current_void_mask, click_y, click_x):
     _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
     enhanced = _clahe.apply(stretched)
 
-    # Seuil Otsu identique à la détection
-    vals    = enhanced[roi_mask > 0].reshape(-1, 1).astype(np.uint8)
-    thr, _  = cv2.threshold(vals, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    thr     = float(thr)
+    vals   = enhanced[roi_mask > 0].reshape(-1, 1).astype(np.uint8)
+    thr, _ = cv2.threshold(vals, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    thr    = float(thr)
 
-    # Carte des pixels clairs (voids potentiels) dans le masque
     bright  = (enhanced.astype(np.float32) > thr) & (roi_mask > 0)
     labeled = measure.label(bright.astype(np.uint8), connectivity=2)
 
     blob_id = int(labeled[click_y, click_x])
-
     if blob_id == 0:
-        # Le point est dans une zone sombre → chercher le composant clair le plus proche
         best_d, best_id = float("inf"), 0
         for r in measure.regionprops(labeled):
             ry, rx = map(int, r.centroid)
@@ -306,11 +303,62 @@ def smart_add_void(gray_image, roi_mask, current_void_mask, click_y, click_x):
             if d < best_d:
                 best_d, best_id = d, r.label
         blob_id = best_id
-
     if blob_id == 0:
         return current_void_mask, 0
 
-    region   = (labeled == blob_id)
+    blob   = (labeled == blob_id).astype(np.uint8)
+    rp_lst = [r for r in measure.regionprops(labeled) if r.label == blob_id]
+    if not rp_lst:
+        return current_void_mask, 0
+    rp = rp_lst[0]
+
+    maj = rp.axis_major_length if hasattr(rp, 'axis_major_length') else rp.major_axis_length
+    mni = rp.axis_minor_length if hasattr(rp, 'axis_minor_length') else rp.minor_axis_length
+    ar  = mni / max(maj, 1)
+    sol = rp.solidity
+
+    # Blob simple (rond/solide ou petit) → prendre directement
+    if ar > 0.55 or sol > 0.80 or rp.area < 500:
+        region = (labeled == blob_id)
+        new_void = current_void_mask.copy()
+        new_void[region] = True
+        return new_void, int(region.sum())
+
+    # Blob complexe (potentiellement void+piste fusionnés)
+    # → watershed par distance transform, sélectionner le pétale du clic
+    try:
+        from scipy import ndimage as _ndi
+        from skimage import segmentation as _seg
+        from skimage.feature import peak_local_max as _plm
+
+        dist   = _ndi.distance_transform_edt(blob)
+        min_d  = max(8, int(np.sqrt(100 / np.pi) * 0.8))
+        coords = _plm(dist, min_distance=min_d, labels=blob, threshold_abs=4.0)
+
+        if len(coords) <= 1:
+            region = (labeled == blob_id)
+        else:
+            markers = np.zeros_like(blob, dtype=np.int32)
+            for i, (py, px) in enumerate(coords, 1):
+                markers[py, px] = i
+            ws     = _seg.watershed(-dist, markers, mask=blob)
+            sub_id = int(ws[click_y, click_x])
+            if sub_id > 0:
+                region = (ws == sub_id) & (blob > 0)
+            else:
+                # Clic sur frontière → pétale le plus proche
+                best_d2, best_sub = float("inf"), 1
+                for lbl in range(1, int(ws.max()) + 1):
+                    pts = np.array(np.where((ws == lbl) & (blob > 0))).T
+                    if not len(pts):
+                        continue
+                    d2 = ((pts[:, 0] - click_y) ** 2 + (pts[:, 1] - click_x) ** 2).min()
+                    if d2 < best_d2:
+                        best_d2, best_sub = d2, lbl
+                region = (ws == best_sub) & (blob > 0)
+    except Exception:
+        region = (labeled == blob_id)
+
     new_void = current_void_mask.copy()
     new_void[region] = True
     return new_void, int(region.sum())
