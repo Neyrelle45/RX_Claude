@@ -134,13 +134,14 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
     void_raw = (enhanced.astype(np.float32) > thr) & (roi_mask > 0)
 
     # ── 4. Morphologie ────────────────────────────────────────────────────────
-    k3  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,  3))
-    k13 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+    k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    k7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 
-    # Ouverture legere : supprime le bruit ponctuel
+    # Ouverture légère : supprime le bruit ponctuel
     cleaned = cv2.morphologyEx(void_raw.astype(np.uint8), cv2.MORPH_OPEN, k3)
-    # Fermeture : soude les fragments d'un meme void
-    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, k13)
+    # Fermeture modérée k7 (pas k13) : soude les fragments sans fusionner
+    # les pistes voisines qui touchent un void
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, k7)
 
     # ── Anti "fromage grignoté" : combler les encoches de vias ───────────────
     # Principe : les vias créent de petites concavités sur le bord des voids.
@@ -183,21 +184,61 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
         filled = np.clip(filled + blob_filled, 0, 1)
     cleaned = filled.astype(np.uint8)
 
-    # ── 5. Filtre taille + forme ──────────────────────────────────────────────
+    # ── 5. Séparation des blobs complexes (void+piste fusionnés) ─────────────
+    # Les blobs avec AR faible ou solidité faible peuvent être deux objets fusionnés.
+    # On applique un watershed par distance-transform pour les séparer proprement.
+    try:
+        from scipy import ndimage as _ndi
+        from skimage import segmentation as _seg
+        from skimage.feature import peak_local_max as _plm
+
+        labeled_tmp2 = measure.label(cleaned, connectivity=2)
+        separated = np.zeros_like(cleaned)
+        for r in measure.regionprops(labeled_tmp2):
+            if r.area < min_void_px:
+                continue
+            blob = (labeled_tmp2 == r.label).astype(np.uint8)
+            maj = r.axis_major_length if hasattr(r, 'axis_major_length') else r.major_axis_length
+            mni = r.axis_minor_length if hasattr(r, 'axis_minor_length') else r.minor_axis_length
+            ar  = mni / max(maj, 1)
+            sol = r.solidity
+
+            # Blob simple (rond, solide) → garder directement
+            if ar > 0.55 or sol > 0.80:
+                separated[blob > 0] = 1
+                continue
+
+            # Blob complexe → séparation par watershed sur distance transform
+            dist = _ndi.distance_transform_edt(blob)
+            min_d = max(8, int(np.sqrt(min_void_px / np.pi) * 0.8))
+            coords = _plm(dist, min_distance=min_d, labels=blob, threshold_abs=5.0)
+            if len(coords) <= 1:
+                separated[blob > 0] = 1
+            else:
+                markers = np.zeros_like(blob, dtype=np.int32)
+                for i, (py, px) in enumerate(coords, 1):
+                    markers[py, px] = i
+                ws = _seg.watershed(-dist, markers, mask=blob)
+                for lbl in range(1, int(ws.max()) + 1):
+                    region = (ws == lbl) & (blob > 0)
+                    if region.sum() >= min_void_px:
+                        separated[region] = 1
+        cleaned = separated.astype(np.uint8)
+    except Exception:
+        pass  # si scipy absent, continuer sans séparation
+
+    # ── 6. Filtre taille + forme ──────────────────────────────────────────────
     # Rejette : barres, lignes, rectangles, blobs géants
-    # Conserve: ronds, ovales, blobs irréguliers, croissants
+    # Conserve : ronds, ovales, blobs irréguliers
     labeled = measure.label(cleaned, connectivity=2)
     filtered = np.zeros_like(cleaned)
 
-    # Précalculer les composants connexes du masque (les "pads" individuels)
-    # pour comparer chaque void à la surface de SON composant parent
-    msk_lab = measure.label(roi_mask.astype(np.uint8), connectivity=2)
+    # Composants connexes du masque pour ratio local par pad
+    msk_lab    = measure.label(roi_mask.astype(np.uint8), connectivity=2)
     total_mask = int(roi_mask.sum()) if roi_mask.sum() > 0 else 1
-    min_comp = total_mask * 0.01  # ignorer les fragments < 1% du total
-    comp_sizes = {}
-    for mr in measure.regionprops(msk_lab):
-        if mr.area >= min_comp:
-            comp_sizes[mr.label] = mr.area
+    min_comp   = total_mask * 0.01
+    comp_sizes = {mr.label: mr.area
+                  for mr in measure.regionprops(msk_lab) if mr.area >= min_comp}
 
     for r in measure.regionprops(labeled):
         if r.area < min_void_px:
@@ -210,21 +251,17 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
         circ = 4 * np.pi * r.area / (r.perimeter ** 2 + 1e-6)
         ecc  = r.eccentricity
 
-        # Taille relative au composant parent (pad auquel ce void appartient)
-        blob_comps = msk_lab[labeled == r.label]
-        uniq, cnt  = np.unique(blob_comps[blob_comps > 0], return_counts=True)
-        if len(uniq):
-            parent_size = comp_sizes.get(int(uniq[np.argmax(cnt)]), total_mask)
-        else:
-            parent_size = total_mask
+        blob_comps  = msk_lab[labeled == r.label]
+        uniq, cnt   = np.unique(blob_comps[blob_comps > 0], return_counts=True)
+        parent_size = comp_sizes.get(int(uniq[np.argmax(cnt)]), total_mask) \
+                      if len(uniq) else total_mask
         ratio_local = r.area / max(parent_size, 1)
 
-        # ── Rejets automatiques ───────────────────────────────────────────────
-        if ar < 0.25 and ecc > 0.95:        # barre / ligne fine
+        if ar < 0.25 and ecc > 0.95:   # barre / ligne fine
             continue
-        if circ < 0.10 and ar < 0.30:       # rectangle plat
+        if circ < 0.10 and ar < 0.30:  # rectangle plat
             continue
-        if ratio_local > 0.45:              # > 45% d'un pad = artefact global
+        if ratio_local > 0.45:          # > 45% du pad = artefact global
             continue
         filtered[labeled == r.label] = 1
 
