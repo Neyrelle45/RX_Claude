@@ -112,9 +112,17 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
     if not roi_mask.any():
         return np.zeros(gray_image.shape, dtype=bool), 0.0
 
-    # ── 1. CLAHE local ────────────────────────────────────────────────────────
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(gray_image)
+    # ── 1. Normalisation robuste par percentile dans le masque ──────────────
+    # Stable : aucun paramètre sensible côté utilisateur.
+    # Stretch p5→p95 du masque sur [0,255] + CLAHE fixe doux (clip=2, grid=16)
+    vals_raw = gray_image[roi_mask > 0]
+    p5  = float(np.percentile(vals_raw, 5))
+    p95 = float(np.percentile(vals_raw, 95))
+    stretched = np.clip(
+        (gray_image.astype(np.float32) - p5) / max(p95 - p5, 1) * 255,
+        0, 255).astype(np.uint8)
+    _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
+    enhanced = _clahe.apply(stretched)
 
     # ── 2. Otsu sur les pixels du masque uniquement ───────────────────────────
     vals = enhanced[roi_mask > 0].reshape(-1, 1).astype(np.uint8)
