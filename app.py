@@ -79,37 +79,22 @@ def get_model_input_size(model) -> tuple:
 # ─── Prétraitement avancé ─────────────────────────────────────────────────────
 
 def preprocess_advanced(gray: np.ndarray,
-                        contrast: float, brightness: int,
-                        clahe_clip: float, clahe_grid: int,
-                        sharpen: float) -> np.ndarray:
+                        contrast: float = 1.0, brightness: int = 0,
+                        clahe_clip: float = 0, clahe_grid: int = 8,
+                        sharpen: float = 0.3) -> np.ndarray:
     """
-    Pipeline de prétraitement optimisé pour images RX de soudure.
+    Prétraitement léger pour preview visuel uniquement.
+    La normalisation pour la détection des voids est faite
+    automatiquement dans detect_voids_threshold (percentile robuste).
 
-    1. Contraste/luminosité linéaires  (base)
-    2. CLAHE  – contraste adaptatif local, révèle les détails fins dans la soudure
-    3. Filtre bilatéral  – réduit le bruit tout en préservant les contours
-    4. Masque de netteté  – accentue les bords soudure/void
+    1. Contraste/luminosité linéaires
+    2. Masque de netteté optionnel
     """
-    # 1. Contraste + luminosité linéaires
     img = cv2.convertScaleAbs(gray, alpha=contrast, beta=brightness)
-
-    # 2. CLAHE (Contrast Limited Adaptive Histogram Equalization)
-    #    clahe_clip = limite d'amplification (2–8) ; élevé = plus de contraste local
-    #    clahe_grid = taille de la grille (2–16) ; petit = plus local
-    if clahe_clip > 0:
-        clahe = cv2.createCLAHE(clipLimit=clahe_clip,
-                                 tileGridSize=(clahe_grid, clahe_grid))
-        img = clahe.apply(img)
-
-    # 3. Débruitage bilatéral (préserve les contours)
-    img = cv2.bilateralFilter(img, 9, 75, 75)
-
-    # 4. Masque de netteté (unsharp mask)
     if sharpen > 0:
         blurred = cv2.GaussianBlur(img, (0, 0), 3)
-        img = cv2.addWeighted(img, 1 + sharpen, blurred, -sharpen, 0)
-        img = np.clip(img, 0, 255).astype(np.uint8)
-
+        img     = cv2.addWeighted(img, 1 + sharpen, blurred, -sharpen, 0)
+        img     = np.clip(img, 0, 255).astype(np.uint8)
     return img
 
 # ─── Masque PNG ───────────────────────────────────────────────────────────────
@@ -155,7 +140,7 @@ def overlay_preview(image_rgb, mask_color):
 
 # ─── Process ──────────────────────────────────────────────────────────────────
 def process_image(image_rgb, mask_color,
-                  contrast, brightness, clahe_clip, clahe_grid, sharpen,
+                  contrast, brightness, sharpen,
                   filter_geo, sensitivity=0, min_void_px=100):
     """Analyse 100% classique — aucun modèle requis."""
     H_img, W_img = image_rgb.shape[:2]
@@ -171,25 +156,22 @@ def process_image(image_rgb, mask_color,
         bin_mask = cv2.resize(bin_mask,(W_img,H_img),interpolation=cv2.INTER_NEAREST)
         bin_mask = (bin_mask>0).astype(np.uint8)
 
-    # 2. Prétraitement CLAHE
-    processed = preprocess_advanced(gray, contrast, brightness,
-                                    clahe_clip, clahe_grid, sharpen)
+    # 2. Prétraitement visuel léger (contraste/netteté pour preview)
+    processed = preprocess_advanced(gray, contrast, brightness, sharpen=sharpen)
 
-    # 3. Analyse classique (CLAHE + Otsu local + filtre géométrique)
+    # 3. Analyse avec normalisation robuste interne
     results   = analyze_voids(None, bin_mask,
-                              gray_image=processed,
+                              gray_image=gray,   # image brute : normalisation auto interne
                               sensitivity=sensitivity,
                               min_void_px=min_void_px)
     vis_image = create_visualization(image_rgb, None, bin_mask, results)
     return vis_image, results, processed
 
 # ─── Preview prétraitement live ───────────────────────────────────────────────
-def preprocess_preview(image_rgb, contrast, brightness,
-                       clahe_clip, clahe_grid, sharpen):
-    """Retourne l'image prétraitée + statistiques pour preview live."""
+def preprocess_preview(image_rgb, contrast, brightness, sharpen):
+    """Retourne l'image prétraitée pour preview live."""
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
-    proc = preprocess_advanced(gray, contrast, brightness,
-                               clahe_clip, clahe_grid, sharpen)
+    proc = preprocess_advanced(gray, contrast, brightness, sharpen=sharpen)
     return cv2.cvtColor(proc, cv2.COLOR_GRAY2RGB)
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
@@ -207,34 +189,25 @@ def sidebar(image_rgb_ref):
 
         with st.expander("ℹ️ Guide des filtres", expanded=False):
             st.markdown("""
-**Contraste** : amplifie les niveaux de gris globalement.
-Utile si l'image est trop terne (valeur > 1.0).
+**Contraste** : amplifie les niveaux de gris (preview visuel).
+Valeur > 1.0 rend l'image plus contrastée visuellement.
+*La détection des voids utilise une normalisation automatique interne.*
 
-**Luminosité** : décale tous les pixels vers le clair/sombre.
+**Luminosité** : décale les pixels vers le clair ou le sombre.
 
-**CLAHE – Clip** : contraste adaptatif *local*.
-⭐ C'est le paramètre le plus important pour les images RX.
-Une valeur de 3–6 révèle les voids sombres dans la soudure brillante.
-Trop élevé (>8) = bruit amplifié.
-
-**CLAHE – Grille** : taille de la zone locale (px).
-Petit (4–8) = très local. Grand (16+) = quasi-global.
-
-**Netteté** : accentue les bords soudure/void.
-Utile pour les images légèrement floues (0.3–0.8).
+**Netteté** : accentue les bords pour le preview (0.3 = doux, 1.0 = fort).
             """)
 
-        contrast   = st.slider("Contraste",     0.5, 2.0, 1.0, 0.05, key="k_contrast")
-        brightness = st.slider("Luminosité",    -50,  50,   0,    5,  key="k_brightness")
-        clahe_clip = st.slider("CLAHE – Clip",  0.0, 10.0, 3.0, 0.5,  key="k_clahe_clip")
-        clahe_grid = st.slider("CLAHE – Grille", 4,   32,   8,   2,   key="k_clahe_grid")
-        sharpen    = st.slider("Netteté",       0.0,  2.0, 0.3, 0.1,  key="k_sharpen")
+        contrast   = st.slider("Contraste",  0.5, 2.0, 1.0, 0.05, key="k_contrast")
+        brightness = st.slider("Luminosité", -50,  50,   0,    5,  key="k_brightness")
+        clahe_clip = 0.0   # non exposé — normalisation automatique interne
+        clahe_grid = 8
+        sharpen    = st.slider("Netteté",    0.0,  2.0, 0.3, 0.1,  key="k_sharpen")
 
         # Preview live
         if image_rgb_ref is not None:
             st.caption("👁️ Preview prétraitement (live)")
-            prev = preprocess_preview(image_rgb_ref, contrast, brightness,
-                                      clahe_clip, clahe_grid, sharpen)
+            prev = preprocess_preview(image_rgb_ref, contrast, brightness, sharpen)
             st.image(prev, use_container_width=True)
 
         st.divider()
@@ -257,7 +230,7 @@ Utile pour les images légèrement floues (0.3–0.8).
                  "100px = défaut. Augmentez pour filtrer le bruit de fond.")
         solder_thr = None   # non utilisé dans approche classique
 
-    return contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo, sensitivity, min_void_px, solder_thr
+    return contrast, brightness, sharpen, filter_geo, sensitivity, min_void_px
 
 # ─── MASQUE ───────────────────────────────────────────────────────────────────
 def mask_panel(image_rgb):
@@ -439,7 +412,7 @@ def main():
 
     # On passe l'image de référence à la sidebar pour le preview live
     img_ref = st.session_state.get("img_ref_for_preview", None)
-    contrast, brightness, clahe_clip, clahe_grid, sharpen, filter_geo, sensitivity, min_void_px, solder_thr = sidebar(img_ref)
+    contrast, brightness, sharpen, filter_geo, sensitivity, min_void_px = sidebar(img_ref)
 
     tab_a, tab_arch, tab_h = st.tabs(["📤 Analyse", "🗄️ Archive", "ℹ️ Instructions"])
 
@@ -471,7 +444,7 @@ def main():
             with st.spinner("🔄 Analyse en cours…"):
                 vis_image, results, proc_img = process_image(
                     image_rgb, mask,
-                    contrast, brightness, clahe_clip, clahe_grid, sharpen,
+                    contrast, brightness, sharpen,
                     filter_geo, sensitivity, min_void_px
                 )
             st.session_state["results"]   = results
@@ -503,7 +476,8 @@ def main():
                     st.image(image_rgb, use_container_width=True)
                 with c2:
                     st.markdown("**Image analysée**")
-                    st.image(vis_image, use_container_width=True)
+                    # Toujours lire depuis session_state pour refléter les corrections
+                    st.image(st.session_state["vis_image"], use_container_width=True)
 
                 # ── Correction manuelle par clic ─────────────────────────────
                 st.divider()
@@ -625,8 +599,7 @@ function sendClick(e){{
                         st.session_state["manual_overrides"] = []
                         _vr,_rs,_pi = process_image(
                             image_rgb, mask, contrast, brightness,
-                            clahe_clip, clahe_grid, sharpen, filter_geo,
-                            sensitivity, min_void_px)
+                            sharpen, filter_geo, sensitivity, min_void_px)
                         st.session_state["results"]   = _rs
                         st.session_state["vis_image"] = _vr
                         st.session_state["proc_img"]  = _pi
@@ -699,9 +672,27 @@ function sendClick(e){{
 
             # ── Tableau métriques ─────────────────────────────────────────────
             st.subheader("📊 Résultats de l'analyse")
-            vr = results["void_ratio"]
-            lr = results["largest_void_ratio"]
-            nv = results["num_voids"]
+            # Recalculer les métriques depuis le void_mask courant (peut avoir été édité)
+            _cur_vm = st.session_state["results"].get("void_mask")
+            if _cur_vm is not None and _cur_vm.any():
+                from skimage import measure as _meas_m
+                _n_sol   = int(st.session_state["results"].get("solder_area",
+                               st.session_state["results"].get("total_inspection_area",1)))
+                _n_v     = int(_cur_vm.sum())
+                _vr_live = _n_v / max(_n_sol,1) * 100
+                # Recalculer le plus gros void intérieur
+                _lbl_m   = _meas_m.label(_cur_vm.astype(np.uint8), connectivity=2)
+                _big_r   = 0.0
+                for _rm in _meas_m.regionprops(_lbl_m):
+                    if _rm.area / max(_n_sol,1) * 100 > _big_r:
+                        _big_r = _rm.area / max(_n_sol,1) * 100
+                _lr_live = _big_r
+                _nv_live = int(_lbl_m.max())
+            else:
+                _vr_live = st.session_state["results"].get("void_ratio", 0)
+                _lr_live = st.session_state["results"].get("largest_void_ratio", 0)
+                _nv_live = st.session_state["results"].get("num_voids", 0)
+            vr = _vr_live; lr = _lr_live; nv = _nv_live
 
             def status(v,t1,t2):
                 return "✅ Bon" if v<t1 else ("⚠️ Acceptable" if v<t2 else "❌ Non conforme")
