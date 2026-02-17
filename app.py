@@ -505,6 +505,100 @@ def main():
                     st.markdown("**Image analysée**")
                     st.image(vis_image, use_container_width=True)
 
+                # ── Correction manuelle ───────────────────────────────────────
+                st.divider()
+                st.markdown("**✏️ Correction manuelle des voids**")
+                st.caption(
+                    "Entrez les coordonnées X,Y d'un point dans l'image analysée "
+                    "pour invalider un void (rouge → soudure) ou valider une zone "
+                    "soudure (vert → void). Les coordonnées sont relatives à l'image affichée."
+                )
+
+                void_mask_edit = st.session_state["results"].get("void_mask")
+                if void_mask_edit is not None:
+                    # Initialiser les overrides manuels
+                    if "manual_overrides" not in st.session_state:
+                        st.session_state["manual_overrides"] = []
+
+                    # Formulaire de correction
+                    ov_col1, ov_col2, ov_col3, ov_col4 = st.columns([2,2,2,2])
+                    with ov_col1:
+                        ov_x = st.number_input("X (px)", 0,
+                                               int(void_mask_edit.shape[1])-1, 0, 1,
+                                               key="ov_x")
+                    with ov_col2:
+                        ov_y = st.number_input("Y (px)", 0,
+                                               int(void_mask_edit.shape[0])-1, 0, 1,
+                                               key="ov_y")
+                    with ov_col3:
+                        ov_action = st.selectbox("Action",
+                                                 ["❌ Invalider void (→ soudure)",
+                                                  "✅ Valider zone (→ void)"],
+                                                 key="ov_action")
+                    with ov_col4:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("Appliquer", use_container_width=True):
+                            action = "remove" if "Invalider" in ov_action else "add"
+                            # Trouver le blob contenant ce point
+                            from skimage import measure as _meas
+                            labeled_ov = _meas.label(void_mask_edit.astype(np.uint8), connectivity=2)
+                            blob_id = int(labeled_ov[ov_y, ov_x])
+                            if blob_id > 0 and action == "remove":
+                                blob_pixels = (labeled_ov == blob_id)
+                                st.session_state["manual_overrides"].append(
+                                    {"action":"remove","pixels": blob_pixels})
+                                # Appliquer immédiatement
+                                new_void = void_mask_edit.copy()
+                                new_void[blob_pixels] = False
+                                st.session_state["results"]["void_mask"] = new_void
+                                st.success(f"✅ Blob supprimé ({blob_pixels.sum()} px)")
+                                st.rerun()
+                            elif action == "add":
+                                # Ajouter un blob circulaire de 20px autour du point
+                                new_void = void_mask_edit.copy()
+                                H,W = new_void.shape
+                                yy,xx = np.ogrid[:H,:W]
+                                circle = ((yy-ov_y)**2 + (xx-ov_x)**2) <= 20**2
+                                new_void[circle] = True
+                                st.session_state["results"]["void_mask"] = new_void
+                                st.session_state["manual_overrides"].append(
+                                    {"action":"add","cy":ov_y,"cx":ov_x,"r":20})
+                                st.success(f"✅ Zone void ajoutée")
+                                st.rerun()
+                            elif blob_id == 0 and action == "remove":
+                                st.warning("⚠️ Le point cliqué n'est pas dans un void détecté.")
+
+                    # Afficher les corrections appliquées
+                    if st.session_state["manual_overrides"]:
+                        st.caption(f"📝 {len(st.session_state['manual_overrides'])} correction(s) appliquée(s)")
+                        if st.button("🔄 Réinitialiser corrections", type="secondary"):
+                            st.session_state["manual_overrides"] = []
+                            # Relancer l'analyse pour revenir au résultat brut
+                            vis_image, results, proc_img = process_image(
+                                image_rgb, mask, contrast, brightness,
+                                clahe_clip, clahe_grid, sharpen,
+                                filter_geo, sensitivity, min_void_px)
+                            st.session_state["results"]   = results
+                            st.session_state["vis_image"] = vis_image
+                            st.session_state["proc_img"]  = proc_img
+                            st.rerun()
+
+                    # Recalculer la visu si des corrections ont été appliquées
+                    if st.session_state.get("manual_overrides"):
+                        edited_results = dict(st.session_state["results"])
+                        edited_vis = create_visualization(
+                            image_rgb, None,
+                            (st.session_state["results"]["void_mask"] |
+                             (bin_mask > 0)).astype(np.uint8) * 0,  # dummy
+                            edited_results)
+                        # Recalculer proprement
+                        from utils.void_analysis_utils import create_visualization as _cv
+                        _bm = bin_mask if "bin_mask" in dir() else                               ((mask[:,:,1]>100)&(mask[:,:,2]<100)&(mask[:,:,0]<100)).astype(np.uint8)
+                        edited_vis = _cv(image_rgb, None, _bm, edited_results)
+                        with c2:
+                            st.markdown("**Image corrigée**")
+                            st.image(edited_vis, use_container_width=True)
+
             # ── Vue Prétraitement ─────────────────────────────────────────────
             with tab_pre:
                 st.markdown("**Image après prétraitement (entrée du modèle)**")
