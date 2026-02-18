@@ -317,47 +317,10 @@ def smart_add_void(gray_image, roi_mask, current_void_mask, click_y, click_x):
     ar  = mni / max(maj, 1)
     sol = rp.solidity
 
-    # Blob simple (rond/solide ou petit) → prendre directement
-    if ar > 0.55 or sol > 0.80 or rp.area < 500:
-        region = (labeled == blob_id)
-        new_void = current_void_mask.copy()
-        new_void[region] = True
-        return new_void, int(region.sum())
-
-    # Blob complexe (potentiellement void+piste fusionnés)
-    # → watershed par distance transform, sélectionner le pétale du clic
-    try:
-        from scipy import ndimage as _ndi
-        from skimage import segmentation as _seg
-        from skimage.feature import peak_local_max as _plm
-
-        dist   = _ndi.distance_transform_edt(blob)
-        min_d  = max(8, int(np.sqrt(100 / np.pi) * 0.8))
-        coords = _plm(dist, min_distance=min_d, labels=blob, threshold_abs=4.0)
-
-        if len(coords) <= 1:
-            region = (labeled == blob_id)
-        else:
-            markers = np.zeros_like(blob, dtype=np.int32)
-            for i, (py, px) in enumerate(coords, 1):
-                markers[py, px] = i
-            ws     = _seg.watershed(-dist, markers, mask=blob)
-            sub_id = int(ws[click_y, click_x])
-            if sub_id > 0:
-                region = (ws == sub_id) & (blob > 0)
-            else:
-                # Clic sur frontière → pétale le plus proche
-                best_d2, best_sub = float("inf"), 1
-                for lbl in range(1, int(ws.max()) + 1):
-                    pts = np.array(np.where((ws == lbl) & (blob > 0))).T
-                    if not len(pts):
-                        continue
-                    d2 = ((pts[:, 0] - click_y) ** 2 + (pts[:, 1] - click_x) ** 2).min()
-                    if d2 < best_d2:
-                        best_d2, best_sub = d2, lbl
-                region = (ws == best_sub) & (blob > 0)
-    except Exception:
-        region = (labeled == blob_id)
+    # CORRECTION MANUELLE : toujours prendre TOUTE la région connexe
+    # (pas de watershed qui fragmente trop)
+    # L'utilisateur peut cliquer plusieurs fois pour affiner
+    region = (labeled == blob_id)
 
     new_void = current_void_mask.copy()
     new_void[region] = True
