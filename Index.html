@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #111; overflow: hidden; }
+#wrap { position: relative; display: inline-block; }
+#vi {
+  display: block;
+  cursor: crosshair;
+  border: 2px solid #444;
+  max-width: 100%;
+}
+#tip {
+  position: absolute;
+  top: 6px; left: 6px;
+  background: rgba(0,0,0,.82);
+  color: #fff;
+  padding: 3px 10px;
+  border-radius: 3px;
+  font: 13px monospace;
+  pointer-events: none;
+  white-space: nowrap;
+}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <img id="vi" onmousemove="mv(event)" onclick="ck(event)" />
+  <div id="tip">🖱 Survolez l'image → coordonnées · Cliquez → valider</div>
+</div>
+
+<script>
+// API officielle Streamlit Components
+(function() {
+  var NW = 0, NH = 0;
+  var img   = document.getElementById("vi");
+  var tip   = document.getElementById("tip");
+  var ready = false;
+
+  function sendHeight() {
+    var h = img.offsetHeight + 10;
+    if (h > 20) window.parent.postMessage({ type: "streamlit:setFrameHeight", height: h }, "*");
+  }
+
+  // Écouter les événements Streamlit (RENDER)
+  window.addEventListener("message", function(e) {
+    var data = e.data;
+    if (!data || !data.type) return;
+
+    if (data.type === "streamlit:render") {
+      var args = data.args || {};
+      NW = args.nat_w || 1;
+      NH = args.nat_h || 1;
+      if (args.img_b64) {
+        img.src = "data:image/png;base64," + args.img_b64;
+      }
+      if (!ready) {
+        ready = true;
+        window.parent.postMessage({ type: "streamlit:componentReady", apiVersion: 1 }, "*");
+      }
+    }
+  });
+
+  img.onload = function() {
+    sendHeight();
+    setTimeout(sendHeight, 100);
+  };
+  window.addEventListener("resize", sendHeight);
+
+  function toNative(e) {
+    var r = img.getBoundingClientRect();
+    var scaleX = NW / r.width;
+    var scaleY = NH / r.height;
+    return [
+      Math.round((e.clientX - r.left) * scaleX),
+      Math.round((e.clientY - r.top)  * scaleY)
+    ];
+  }
+
+  function mv(e) {
+    var c = toNative(e);
+    tip.style.background = "rgba(0,0,0,.82)";
+    tip.textContent = "X=" + c[0] + "   Y=" + c[1];
+  }
+
+  function ck(e) {
+    var c = toNative(e);
+    tip.style.background = "rgba(0,110,20,.90)";
+    tip.textContent = "✔ X=" + c[0] + "   Y=" + c[1] + "  →  cliquez Appliquer ↓";
+    // Envoyer vers Python via l'API Streamlit officielle
+    window.parent.postMessage({
+      type:  "streamlit:setComponentValue",
+      value: { x: c[0], y: c[1] }
+    }, "*");
+  }
+
+  // Signal initial
+  window.parent.postMessage({ type: "streamlit:componentReady", apiVersion: 1 }, "*");
+})();
+</script>
+</body>
+</html>
