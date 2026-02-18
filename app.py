@@ -222,7 +222,7 @@ Valeur > 1.0 rend l'image plus contrastée visuellement.
         st.subheader("🎯 Détection voids")
         st.caption("Détection classique : CLAHE + seuil Otsu local dans le masque.")
         sensitivity = st.slider(
-            "Ajustement seuil (niveaux)", -30, 30, 0, 5,
+            "Ajustement seuil (niveaux)", -30, 30, 0, 1,
             help="0 = seuil Otsu automatique (recommandé).\n"
                  "Valeur négative → seuil plus bas → détecte plus de voids.\n"
                  "Valeur positive → seuil plus haut → détecte moins de voids.\n"
