@@ -12,14 +12,6 @@ from PIL import Image
 import streamlit as st
 import streamlit.components.v1 as components
 
-# ─── Composant natif de sélection de coordonnées par clic ─────────────────────
-import os as _os
-_COMP_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "coord_picker")
-if _os.path.isdir(_COMP_DIR):
-    _coord_picker_comp = components.declare_component("coord_picker", path=_COMP_DIR)
-else:
-    _coord_picker_comp = None
-
 import pandas as pd
 
 # ─── Imports utilitaires (détection 100% classique, sans TensorFlow) ──────────
@@ -492,7 +484,7 @@ def main():
 
                 # ── Correction manuelle par clic ─────────────────────────────
                 st.divider()
-                st.markdown("**✏️ Correction manuelle — cliquez directement sur l'image**")
+                st.markdown("**✏️ Correction manuelle — cliquez sur l'image**")
 
                 void_mask_edit = st.session_state["results"].get("void_mask")
                 if void_mask_edit is not None:
@@ -509,59 +501,57 @@ def main():
                          "✅ Ajouter void  (clic vert→rouge)"],
                         horizontal=True, key="ov_action")
 
-                    # Encoder l'image en base64 pour le composant
-                    import base64 as _b64mod
+                    # Préparer l'image à la taille d'affichage
                     from PIL import Image as _PIL2
-                    _vis_resized = cv2.resize(
-                        st.session_state["vis_image"].astype(np.uint8),
-                        (_DISP_W, _DISP_H), interpolation=cv2.INTER_AREA)
-                    _vbuf = io.BytesIO()
-                    _PIL2.fromarray(_vis_resized).save(_vbuf, format="PNG")
-                    _vb64 = _b64mod.b64encode(_vbuf.getvalue()).decode()
+                    _vis_rgb = st.session_state["vis_image"].astype(np.uint8)
+                    _vis_pil = _PIL2.fromarray(_vis_rgb).resize(
+                        (_DISP_W, _DISP_H), _PIL2.LANCZOS)
 
-                    # ── Composant clic natif Streamlit ────────────────────────
-                    if _coord_picker_comp is not None:
-                        _click = _coord_picker_comp(
-                            img_b64=_vb64,
-                            nat_w=_W_nat,
-                            nat_h=_H_nat,
-                            key="coord_picker",
-                            default=None,
+                    # streamlit_image_coordinates : retourne {x, y} en pixels display au clic
+                    try:
+                        from streamlit_image_coordinates import streamlit_image_coordinates
+                        _coords = streamlit_image_coordinates(
+                            _vis_pil,
+                            key="image_coords"
                         )
-                    else:
-                        _click = None
-                        # Fallback : image statique + saisie manuelle
-                        st.image(_vis_resized, use_container_width=False, width=_DISP_W)
-                        st.info("ℹ️ Composant de clic non disponible — saisissez les coordonnées manuellement ci-dessous.")
+                    except (ImportError, Exception) as e:
+                        _coords = None
+                        st.image(_vis_pil, use_container_width=False, width=_DISP_W)
+                        st.warning(f"⚠️ streamlit-image-coordinates non disponible : {e}")
+                        st.info("💡 Installez le package : `pip install streamlit-image-coordinates`")
 
-                    # Récupérer les coords (clic frais ou dernier clic mémorisé)
-                    if _click is not None and isinstance(_click, dict):
-                        _qx = int(np.clip(_click.get("x", 0), 0, _W_nat - 1))
-                        _qy = int(np.clip(_click.get("y", 0), 0, _H_nat - 1))
-                        st.session_state["click_x"] = _qx
-                        st.session_state["click_y"] = _qy
+                    # Convertir coords display → natifs
+                    if _coords is not None:
+                        _x_disp = _coords.get("x", 0)
+                        _y_disp = _coords.get("y", 0)
+                        _x_nat = int(np.clip(_x_disp * _W_nat / _DISP_W, 0, _W_nat - 1))
+                        _y_nat = int(np.clip(_y_disp * _H_nat / _DISP_H, 0, _H_nat - 1))
+                        # Stocker dans session_state pour persistance
+                        st.session_state["last_click_x"] = _x_nat
+                        st.session_state["last_click_y"] = _y_nat
+                        st.caption(f"📍 Dernier clic : **X={_x_nat}  Y={_y_nat}** (pixels natifs)")
                     else:
-                        _qx = st.session_state.get("click_x", 0)
-                        _qy = st.session_state.get("click_y", 0)
+                        _x_nat = st.session_state.get("last_click_x", 0)
+                        _y_nat = st.session_state.get("last_click_y", 0)
 
-                    # Toujours afficher les number_inputs (éditable + fallback)
+                    # Champs pour afficher/éditer les coordonnées
                     _kc1, _kc2, _kc3 = st.columns([2, 2, 3])
                     with _kc1:
-                        ov_x = st.number_input("X (px)", 0, _W_nat - 1,
-                                               value=_qx, key="ov_x")
+                        ov_x = st.number_input("X (px)", 0, _W_nat - 1, 
+                                              value=_x_nat, key="ov_x")
                     with _kc2:
-                        ov_y = st.number_input("Y (px)", 0, _H_nat - 1,
-                                               value=_qy, key="ov_y")
+                        ov_y = st.number_input("Y (px)", 0, _H_nat - 1, 
+                                              value=_y_nat, key="ov_y")
                     with _kc3:
                         st.write("")
                         _bc1, _bc2 = st.columns(2)
                         with _bc1:
                             do_apply = st.button("✅ Appliquer",
-                                                 use_container_width=True)
+                                                use_container_width=True)
                         with _bc2:
                             do_reset = st.button("🔄 Réinitialiser",
-                                                 use_container_width=True,
-                                                 type="secondary")
+                                                use_container_width=True,
+                                                type="secondary")
 
                     if do_apply:
                         from skimage import measure as _meas2
