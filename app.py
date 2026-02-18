@@ -10,6 +10,16 @@ import cv2
 import numpy as np
 from PIL import Image
 import streamlit as st
+import streamlit.components.v1 as components
+
+# ─── Composant natif de sélection de coordonnées par clic ─────────────────────
+import os as _os
+_COMP_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "coord_picker")
+if _os.path.isdir(_COMP_DIR):
+    _coord_picker_comp = components.declare_component("coord_picker", path=_COMP_DIR)
+else:
+    _coord_picker_comp = None
+
 import pandas as pd
 
 # ─── Imports utilitaires (détection 100% classique, sans TensorFlow) ──────────
@@ -490,7 +500,6 @@ def main():
                         st.session_state["manual_overrides"] = []
 
                     _H_nat, _W_nat = void_mask_edit.shape[:2]
-                    # Taille d'affichage fixe 700px large
                     _DISP_W = 700
                     _DISP_H = int(_H_nat * _DISP_W / max(_W_nat, 1))
 
@@ -500,48 +509,59 @@ def main():
                          "✅ Ajouter void  (clic vert→rouge)"],
                         horizontal=True, key="ov_action")
 
-                    # Redimensionner l'image pour affichage
+                    # Encoder l'image en base64 pour le composant
+                    import base64 as _b64mod
                     from PIL import Image as _PIL2
-                    _vis_pil = _PIL2.fromarray(
-                        st.session_state["vis_image"].astype(np.uint8)
-                    ).resize((_DISP_W, _DISP_H), _PIL2.LANCZOS)
+                    _vis_resized = cv2.resize(
+                        st.session_state["vis_image"].astype(np.uint8),
+                        (_DISP_W, _DISP_H), interpolation=cv2.INTER_AREA)
+                    _vbuf = io.BytesIO()
+                    _PIL2.fromarray(_vis_resized).save(_vbuf, format="PNG")
+                    _vb64 = _b64mod.b64encode(_vbuf.getvalue()).decode()
 
-                    # streamlit_image_coordinates : clic natif → coords display
-                    try:
-                        from streamlit_image_coordinates import streamlit_image_coordinates as _sic
-                        _click = _sic(_vis_pil, key="img_click")
-                    except ImportError:
+                    # ── Composant clic natif Streamlit ────────────────────────
+                    if _coord_picker_comp is not None:
+                        _click = _coord_picker_comp(
+                            img_b64=_vb64,
+                            nat_w=_W_nat,
+                            nat_h=_H_nat,
+                            key="coord_picker",
+                            default=None,
+                        )
+                    else:
                         _click = None
-                        st.image(_vis_pil, use_container_width=False, width=_DISP_W)
-                        st.warning("Package streamlit-image-coordinates manquant.")
+                        # Fallback : image statique + saisie manuelle
+                        st.image(_vis_resized, use_container_width=False, width=_DISP_W)
+                        st.info("ℹ️ Composant de clic non disponible — saisissez les coordonnées manuellement ci-dessous.")
 
-                    # Convertir coords display → natives
-                    if _click is not None:
-                        _dx = int(np.clip(_click["x"], 0, _DISP_W - 1))
-                        _dy = int(np.clip(_click["y"], 0, _DISP_H - 1))
-                        _qx = int(_dx * _W_nat / _DISP_W)
-                        _qy = int(_dy * _H_nat / _DISP_H)
-                        # Stocker le dernier clic valide
+                    # Récupérer les coords (clic frais ou dernier clic mémorisé)
+                    if _click is not None and isinstance(_click, dict):
+                        _qx = int(np.clip(_click.get("x", 0), 0, _W_nat - 1))
+                        _qy = int(np.clip(_click.get("y", 0), 0, _H_nat - 1))
                         st.session_state["click_x"] = _qx
                         st.session_state["click_y"] = _qy
                     else:
                         _qx = st.session_state.get("click_x", 0)
                         _qy = st.session_state.get("click_y", 0)
 
-                    # Afficher les coords du dernier clic + boutons action
-                    if _click is not None or st.session_state.get("click_x", 0) > 0 or st.session_state.get("click_y", 0) > 0:
-                        st.caption(f"📍 Dernier clic : X={_qx}  Y={_qy} (pixels natifs)")
-
-                    _bc1, _bc2 = st.columns(2)
-                    with _bc1:
-                        do_apply = st.button("✅ Appliquer au point cliqué",
-                                             use_container_width=True,
-                                             disabled=(_click is None and st.session_state.get("click_x",0)==0))
-                    with _bc2:
-                        do_reset = st.button("🔄 Réinitialiser", use_container_width=True,
-                                              type="secondary")
-                    # Alias pour le code do_apply
-                    ov_x, ov_y = _qx, _qy
+                    # Toujours afficher les number_inputs (éditable + fallback)
+                    _kc1, _kc2, _kc3 = st.columns([2, 2, 3])
+                    with _kc1:
+                        ov_x = st.number_input("X (px)", 0, _W_nat - 1,
+                                               value=_qx, key="ov_x")
+                    with _kc2:
+                        ov_y = st.number_input("Y (px)", 0, _H_nat - 1,
+                                               value=_qy, key="ov_y")
+                    with _kc3:
+                        st.write("")
+                        _bc1, _bc2 = st.columns(2)
+                        with _bc1:
+                            do_apply = st.button("✅ Appliquer",
+                                                 use_container_width=True)
+                        with _bc2:
+                            do_reset = st.button("🔄 Réinitialiser",
+                                                 use_container_width=True,
+                                                 type="secondary")
 
                     if do_apply:
                         from skimage import measure as _meas2
