@@ -222,13 +222,13 @@ Valeur > 1.0 rend l'image plus contrastée visuellement.
         st.subheader("🎯 Détection voids")
         st.caption("Détection classique : CLAHE + seuil Otsu local dans le masque.")
         sensitivity = st.slider(
-            "Ajustement seuil (niveaux)", -30, 30, 0, 5,
+            "Ajustement seuil (niveaux)", -30, 30, -10, 5,
             help="0 = seuil Otsu automatique (recommandé).\n"
                  "Valeur négative → seuil plus bas → détecte plus de voids.\n"
                  "Valeur positive → seuil plus haut → détecte moins de voids.\n"
                  "Physique RX : voids = zones MOINS SOMBRES que la soudure dense.")
         min_void_px = st.slider(
-            "Taille min. void (px)", 50, 2000, 100, 50,
+            "Taille min. void (px)", 20, 1000, 50, 10,
             help="Blobs plus petits que cette surface sont ignorés.\n"
                  "100px = défaut. Augmentez pour filtrer le bruit de fond.")
         solder_thr = None   # non utilisé dans approche classique
@@ -522,7 +522,14 @@ def main():
                         ov_x = int(np.clip(_x_disp * _W_nat / _DISP_W, 0, _W_nat - 1))
                         ov_y = int(np.clip(_y_disp * _H_nat / _DISP_H, 0, _H_nat - 1))
                         
-                        st.success(f"🎯 Clic détecté : **X={ov_x}  Y={ov_y}** → traitement...")
+                        # Éviter la boucle : comparer avec le dernier clic traité
+                        _last_processed = st.session_state.get("last_processed_click", None)
+                        _current_click = (ov_x, ov_y, ov_action)
+                        
+                        if _last_processed != _current_click:
+                            # NOUVEAU clic → traiter
+                            st.session_state["last_processed_click"] = _current_click
+                            st.success(f"🎯 Clic : **X={ov_x}  Y={ov_y}** → traitement...")
                         
                         # Exécuter l'action IMMÉDIATEMENT
                         from skimage import measure as _meas2
