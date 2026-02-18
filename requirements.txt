@@ -8,3 +8,4 @@ plotly
 pandas
 matplotlib
 streamlit-image-coordinates==0.1.6
+altair<5
