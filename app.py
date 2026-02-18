@@ -222,7 +222,7 @@ Valeur > 1.0 rend l'image plus contrastée visuellement.
         st.subheader("🎯 Détection voids")
         st.caption("Détection classique : CLAHE + seuil Otsu local dans le masque.")
         sensitivity = st.slider(
-            "Ajustement seuil (niveaux)", -30, 30, 0, 1,
+            "Ajustement seuil (niveaux)", -30, 30, 0, 5,
             help="0 = seuil Otsu automatique (recommandé).\n"
                  "Valeur négative → seuil plus bas → détecte plus de voids.\n"
                  "Valeur positive → seuil plus haut → détecte moins de voids.\n"
@@ -482,9 +482,9 @@ def main():
                     # Toujours lire depuis session_state pour refléter les corrections
                     st.image(st.session_state["vis_image"], use_container_width=True)
 
-                # ── Correction manuelle par clic ─────────────────────────────
+                # ── Correction manuelle par clic AUTOMATIQUE ──────────────────
                 st.divider()
-                st.markdown("**✏️ Correction manuelle — cliquez sur l'image**")
+                st.markdown("**✏️ Correction manuelle — cliquez directement sur l'image**")
 
                 void_mask_edit = st.session_state["results"].get("void_mask")
                 if void_mask_edit is not None:
@@ -501,112 +501,67 @@ def main():
                          "✅ Ajouter void  (clic vert→rouge)"],
                         horizontal=True, key="ov_action")
 
-                    # Préparer l'image à la taille d'affichage
+                    # Image cliquable
                     from PIL import Image as _PIL2
                     _vis_rgb = st.session_state["vis_image"].astype(np.uint8)
                     _vis_pil = _PIL2.fromarray(_vis_rgb).resize(
                         (_DISP_W, _DISP_H), _PIL2.LANCZOS)
 
-                    # streamlit_image_coordinates : retourne {x, y} en pixels display au clic
                     try:
                         from streamlit_image_coordinates import streamlit_image_coordinates
-                        _coords = streamlit_image_coordinates(
-                            _vis_pil,
-                            key="image_coords"
-                        )
+                        _coords = streamlit_image_coordinates(_vis_pil, key="image_coords")
                     except (ImportError, Exception) as e:
                         _coords = None
                         st.image(_vis_pil, use_container_width=False, width=_DISP_W)
-                        st.warning(f"⚠️ streamlit-image-coordinates non disponible : {e}")
-                        st.info("💡 Installez le package : `pip install streamlit-image-coordinates`")
+                        st.warning(f"⚠️ streamlit-image-coordinates non disponible")
 
-                    # Convertir coords display → natifs
+                    # ── ACTION AUTOMATIQUE AU CLIC ────────────────────────────
                     if _coords is not None:
                         _x_disp = _coords.get("x", 0)
                         _y_disp = _coords.get("y", 0)
-                        _x_nat = int(np.clip(_x_disp * _W_nat / _DISP_W, 0, _W_nat - 1))
-                        _y_nat = int(np.clip(_y_disp * _H_nat / _DISP_H, 0, _H_nat - 1))
-                        # Stocker dans session_state pour persistance
-                        st.session_state["last_click_x"] = _x_nat
-                        st.session_state["last_click_y"] = _y_nat
-                        st.caption(f"📍 Dernier clic : **X={_x_nat}  Y={_y_nat}** (pixels natifs)")
-                    else:
-                        _x_nat = st.session_state.get("last_click_x", 0)
-                        _y_nat = st.session_state.get("last_click_y", 0)
-
-                    # Champs pour afficher/éditer les coordonnées
-                    _kc1, _kc2, _kc3 = st.columns([2, 2, 3])
-                    with _kc1:
-                        ov_x = st.number_input("X (px)", 0, _W_nat - 1, 
-                                              value=_x_nat, key="ov_x")
-                    with _kc2:
-                        ov_y = st.number_input("Y (px)", 0, _H_nat - 1, 
-                                              value=_y_nat, key="ov_y")
-                    with _kc3:
-                        st.write("")
-                        _bc1, _bc2 = st.columns(2)
-                        with _bc1:
-                            do_apply = st.button("✅ Appliquer",
-                                                use_container_width=True)
-                        with _bc2:
-                            do_reset = st.button("🔄 Réinitialiser",
-                                                use_container_width=True,
-                                                type="secondary")
-
-                    if do_apply:
+                        ov_x = int(np.clip(_x_disp * _W_nat / _DISP_W, 0, _W_nat - 1))
+                        ov_y = int(np.clip(_y_disp * _H_nat / _DISP_H, 0, _H_nat - 1))
+                        
+                        st.success(f"🎯 Clic détecté : **X={ov_x}  Y={ov_y}** → traitement...")
+                        
+                        # Exécuter l'action IMMÉDIATEMENT
                         from skimage import measure as _meas2
                         void_now = st.session_state["results"]["void_mask"]
-                        _H_v, _W_v = void_now.shape[:2]
-                        # Clamp des coordonnées dans les bornes de l'image native
-                        _cx = int(np.clip(ov_x, 0, _W_v - 1))
-                        _cy = int(np.clip(ov_y, 0, _H_v - 1))
-                        # Masque binaire
                         _bm2 = ((mask[:,:,1]>100)&(mask[:,:,2]<100)&
                                 (mask[:,:,0]<100)).astype(np.uint8) \
                                if mask.ndim==3 else (mask>127).astype(np.uint8)
 
                         if "Supprimer" in ov_action:
                             _lab = _meas2.label(void_now.astype(np.uint8), connectivity=2)
-                            _bid = int(_lab[_cy, _cx])
+                            _bid = int(_lab[ov_y, ov_x])
                             if _bid > 0:
                                 _bpx = (_lab == _bid)
-                                _nv  = void_now.copy()
-                                _nv[_bpx] = False
-                                st.session_state["results"]["void_mask"] = _nv
+                                void_now[_bpx] = False
+                                st.session_state["results"]["void_mask"] = void_now
                                 st.session_state["manual_overrides"].append({"a":"rm"})
                                 st.session_state["vis_image"] = create_visualization(
                                     image_rgb, None, _bm2, st.session_state["results"])
-                                st.success(f"✅ Void supprimé ({_bpx.sum():,} px)")
+                                st.info(f"✅ Void supprimé ({_bpx.sum():,} px)")
                                 st.rerun()
                             else:
-                                # Debug : montrer la valeur du void_mask au point cliqué
-                                _in_mask = bool(_bm2[_cy, _cx] > 0)
-                                st.warning(
-                                    f"⚠️ Aucun void au pixel ({_cx},{_cy}). "
-                                    f"Dans le masque : {'✅' if _in_mask else '❌'}. "
-                                    f"Vérifiez que les coords affichées dans l'infobulle "
-                                    f"correspondent bien à une zone rouge.")
+                                st.warning(f"⚠️ Pas de void au pixel ({ov_x},{ov_y})")
                         else:
                             _gray_raw = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
-                            # Vérifier que le point est dans le masque
-                            if _bm2[_cy, _cx] == 0:
-                                st.warning(f"⚠️ Le point ({_cx},{_cy}) est hors du masque (zone noire). "
-                                           f"Cliquez dans une zone verte ou rouge.")
+                            _nv, _n_added = smart_add_void(_gray_raw, _bm2, void_now, ov_y, ov_x)
+                            if _n_added > 0:
+                                st.session_state["results"]["void_mask"] = _nv
+                                st.session_state["manual_overrides"].append({"a":"add"})
+                                st.session_state["vis_image"] = create_visualization(
+                                    image_rgb, None, _bm2, st.session_state["results"])
+                                st.info(f"✅ Void ajouté ({_n_added:,} px)")
+                                st.rerun()
                             else:
-                                _nv, _n_added = smart_add_void(
-                                    _gray_raw, _bm2, void_now, _cy, _cx)
-                                if _n_added > 0:
-                                    st.session_state["results"]["void_mask"] = _nv
-                                    st.session_state["manual_overrides"].append({"a":"add"})
-                                    st.session_state["vis_image"] = create_visualization(
-                                        image_rgb, None, _bm2, st.session_state["results"])
-                                    st.success(
-                                        f"✅ Void ajouté ({_n_added:,} px)")
-                                    st.rerun()
-                                else:
-                                    st.warning(
-                                        f"⚠️ Pas de région claire au pixel ({_cx},{_cy}). "
-                                        f"Essayez un point plus au centre de la zone claire.")
+                                st.warning(f"⚠️ Pas de zone claire au pixel ({ov_x},{ov_y})")
+                    
+                    # Bouton reset seul
+                    do_reset = st.button("🔄 Réinitialiser toutes les corrections",
+                                        use_container_width=True, type="secondary")
+
 
                     if do_reset:
                         st.session_state["manual_overrides"] = []
