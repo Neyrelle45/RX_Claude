@@ -9,3 +9,4 @@ pandas
 matplotlib
 streamlit-image-coordinates==0.1.6
 altair<5
+streamlit>=1.35.0
