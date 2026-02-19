@@ -317,10 +317,39 @@ def smart_add_void(gray_image, roi_mask, current_void_mask, click_y, click_x):
     ar  = mni / max(maj, 1)
     sol = rp.solidity
 
-    # CORRECTION MANUELLE : toujours prendre TOUTE la région connexe
-    # (pas de watershed qui fragmente trop)
-    # L'utilisateur peut cliquer plusieurs fois pour affiner
-    region = (labeled == blob_id)
+    # CORRECTION MANUELLE ADAPTATIVE :
+    # - Blob simple/compact → toute la région
+    # - Blob allongé ou très irrégulier (AR<0.4 OU sol<0.65) → watershed
+    #   pour séparer void+piste qui se touchent
+    if ar > 0.4 and sol > 0.65:
+        # Blob assez rond → prendre directement
+        region = (labeled == blob_id)
+    else:
+        # Blob complexe → watershed limité
+        try:
+            from scipy import ndimage as _ndi
+            from skimage import segmentation as _seg
+            from skimage.feature import peak_local_max as _plm
+
+            dist = _ndi.distance_transform_edt(blob)
+            min_d = max(12, int(np.sqrt(100 / np.pi) * 1.2))
+            coords = _plm(dist, min_distance=min_d, labels=blob, threshold_abs=6.0)
+
+            if len(coords) <= 1:
+                region = (labeled == blob_id)
+            else:
+                # Watershed pour séparer
+                markers = np.zeros_like(blob, dtype=np.int32)
+                for i, (py, px) in enumerate(coords, 1):
+                    markers[py, px] = i
+                ws = _seg.watershed(-dist, markers, mask=blob)
+                sub_id = int(ws[click_y, click_x])
+                if sub_id > 0:
+                    region = (ws == sub_id) & (blob > 0)
+                else:
+                    region = (labeled == blob_id)
+        except Exception:
+            region = (labeled == blob_id)
 
     new_void = current_void_mask.copy()
     new_void[region] = True
