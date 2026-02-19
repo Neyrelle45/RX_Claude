@@ -512,54 +512,52 @@ def main():
                         st.image(_vis_pil, use_container_width=False, width=_DISP_W)
                         st.warning(f"⚠️ streamlit-image-coordinates non disponible")
 
-                    # ── ACTION AUTOMATIQUE AU CLIC ────────────────────────────
+                    # ── ACTION AU CLIC (avec protection boucle) ───────────────
                     if _coords is not None:
                         _x_disp = _coords.get("x", 0)
                         _y_disp = _coords.get("y", 0)
                         ov_x = int(np.clip(_x_disp * _W_nat / _DISP_W, 0, _W_nat - 1))
                         ov_y = int(np.clip(_y_disp * _H_nat / _DISP_H, 0, _H_nat - 1))
                         
-                        # Éviter boucle : identifier uniquement les NOUVEAUX clics
+                        # Éviter boucle : exécuter SEULEMENT si nouveau clic
                         _action_key = f"{ov_x}_{ov_y}_{ov_action}"
                         _last_action = st.session_state.get("last_action_executed", "")
                         
                         if _action_key != _last_action:
-                            # Marquer IMMÉDIATEMENT pour éviter double exécution
+                            # NOUVEAU CLIC → marquer ET exécuter
                             st.session_state["last_action_executed"] = _action_key
                         
-                        # Exécuter l'action IMMÉDIATEMENT
-                        from skimage import measure as _meas2
-                        void_now = st.session_state["results"]["void_mask"]
-                        _bm2 = ((mask[:,:,1]>100)&(mask[:,:,2]<100)&
-                                (mask[:,:,0]<100)).astype(np.uint8) \
-                               if mask.ndim==3 else (mask>127).astype(np.uint8)
+                            # Exécuter l'action
+                            from skimage import measure as _meas2
+                            void_now = st.session_state["results"]["void_mask"]
+                            _bm2 = ((mask[:,:,1]>100)&(mask[:,:,2]<100)&
+                                    (mask[:,:,0]<100)).astype(np.uint8) \
+                                   if mask.ndim==3 else (mask>127).astype(np.uint8)
 
-                        if "Supprimer" in ov_action:
-                            _lab = _meas2.label(void_now.astype(np.uint8), connectivity=2)
-                            _bid = int(_lab[ov_y, ov_x])
-                            if _bid > 0:
-                                _bpx = (_lab == _bid)
-                                void_now[_bpx] = False
-                                st.session_state["results"]["void_mask"] = void_now
-                                st.session_state["manual_overrides"].append({"a":"rm"})
-                                st.session_state["vis_image"] = create_visualization(
-                                    image_rgb, None, _bm2, st.session_state["results"])
-                                st.info(f"✅ Void supprimé ({_bpx.sum():,} px)")
-                                st.rerun()
+                            if "Supprimer" in ov_action:
+                                _lab = _meas2.label(void_now.astype(np.uint8), connectivity=2)
+                                _bid = int(_lab[ov_y, ov_x])
+                                if _bid > 0:
+                                    _bpx = (_lab == _bid)
+                                    void_now[_bpx] = False
+                                    st.session_state["results"]["void_mask"] = void_now
+                                    st.session_state["manual_overrides"].append({"a":"rm"})
+                                    st.session_state["vis_image"] = create_visualization(
+                                        image_rgb, None, _bm2, st.session_state["results"])
+                                    st.rerun()
+                                else:
+                                    st.warning(f"⚠️ Pas de void au pixel ({ov_x},{ov_y})")
                             else:
-                                st.warning(f"⚠️ Pas de void au pixel ({ov_x},{ov_y})")
-                        else:
-                            _gray_raw = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
-                            _nv, _n_added = smart_add_void(_gray_raw, _bm2, void_now, ov_y, ov_x)
-                            if _n_added > 0:
-                                st.session_state["results"]["void_mask"] = _nv
-                                st.session_state["manual_overrides"].append({"a":"add"})
-                                st.session_state["vis_image"] = create_visualization(
-                                    image_rgb, None, _bm2, st.session_state["results"])
-                                st.info(f"✅ Void ajouté ({_n_added:,} px)")
-                                st.rerun()
-                            else:
-                                st.warning(f"⚠️ Pas de zone claire au pixel ({ov_x},{ov_y})")
+                                _gray_raw = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+                                _nv, _n_added = smart_add_void(_gray_raw, _bm2, void_now, ov_y, ov_x)
+                                if _n_added > 0:
+                                    st.session_state["results"]["void_mask"] = _nv
+                                    st.session_state["manual_overrides"].append({"a":"add"})
+                                    st.session_state["vis_image"] = create_visualization(
+                                        image_rgb, None, _bm2, st.session_state["results"])
+                                    st.rerun()
+                                else:
+                                    st.warning(f"⚠️ Pas de zone claire au pixel ({ov_x},{ov_y})")
                     
                     # Bouton reset seul
                     do_reset = st.button("🔄 Réinitialiser toutes les corrections",
