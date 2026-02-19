@@ -504,13 +504,17 @@ def main():
                     _vis_pil = _PIL2.fromarray(_vis_rgb).resize(
                         (_DISP_W, _DISP_H), _PIL2.LANCZOS)
 
+                    _coords = None
                     try:
                         from streamlit_image_coordinates import streamlit_image_coordinates
                         _coords = streamlit_image_coordinates(_vis_pil, key="image_coords")
-                    except (ImportError, Exception) as e:
-                        _coords = None
-                        st.image(_vis_pil, use_container_width=False, width=_DISP_W)
-                        st.warning(f"⚠️ streamlit-image-coordinates non disponible")
+                    except (ImportError, Exception):
+                        pass
+                    
+                    # Toujours afficher l'image en fallback si coords None
+                    if _coords is None:
+                        st.image(_vis_pil, use_container_width=False, width=_DISP_W,
+                                caption="📍 Cliquez pour sélectionner (coords manuelles si package absent)")
 
                     # ── ACTION AU CLIC (avec protection boucle) ───────────────
                     if _coords is not None:
