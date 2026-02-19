@@ -185,52 +185,42 @@ def sidebar(image_rgb_ref):
     with st.sidebar:
         st.header("⚙️ Configuration")
 
-        st.divider()
-
-        # Prétraitement
-        st.subheader("🎛️ Prétraitement")
-
-        with st.expander("ℹ️ Guide des filtres", expanded=False):
+        # Prétraitement - compact
+        st.markdown("### 🎛️ Prétraitement")
+        with st.expander("ℹ️ Guide", expanded=False):
             st.markdown("""
-**Contraste** : amplifie les niveaux de gris (preview visuel).
-Valeur > 1.0 rend l'image plus contrastée visuellement.
-*La détection des voids utilise une normalisation automatique interne.*
-
-**Luminosité** : décale les pixels vers le clair ou le sombre.
-
-**Netteté** : accentue les bords pour le preview (0.3 = doux, 1.0 = fort).
+**Contraste** : amplifie les niveaux de gris.
+**Luminosité** : décale vers clair/sombre.
+**Netteté** : accentue les bords.
             """)
 
-        contrast   = st.slider("Contraste",  0.5, 2.0, 1.0, 0.05, key="k_contrast")
-        brightness = st.slider("Luminosité", -50,  50,   0,    5,  key="k_brightness")
-        clahe_clip = 0.0   # non exposé — normalisation automatique interne
-        clahe_grid = 8
-        sharpen    = st.slider("Netteté",    0.0,  2.0, 0.3, 0.1,  key="k_sharpen")
+        st.caption("Contraste"); contrast = st.slider("c1", 0.5, 2.0, 1.0, 0.05, 
+                                                       label_visibility="collapsed")
+        st.caption("Luminosité"); brightness = st.slider("c2", -50, 50, 0, 5,
+                                                          label_visibility="collapsed")
+        st.caption("Netteté"); sharpen = st.slider("c3", 0.0, 2.0, 0.3, 0.1,
+                                                    label_visibility="collapsed")
+        clahe_clip = 0.0; clahe_grid = 8
 
-        # Preview live
+        # Preview compact
         if image_rgb_ref is not None:
-            st.caption("👁️ Preview prétraitement (live)")
-            prev = preprocess_preview(image_rgb_ref, contrast, brightness, sharpen)
-            st.image(prev, use_container_width=True)
+            with st.expander("👁️ Preview", expanded=False):
+                prev = preprocess_preview(image_rgb_ref, contrast, brightness, sharpen)
+                st.image(prev, use_container_width=True)
 
-        st.divider()
-        st.subheader("🔍 Analyse")
-        filter_geo = st.checkbox("Filtrer formes géométriques", value=True,
-                                 help="Exclut vias et pistes (cercles/rectangles parfaits)")
+        st.markdown("---")
+        st.markdown("### 🔍 Analyse")
+        filter_geo = st.checkbox("Filtrer géométrie", value=True,
+                                help="Exclut cercles/rectangles parfaits")
 
-        st.divider()
-        st.subheader("🎯 Détection voids")
-        st.caption("Détection classique : CLAHE + seuil Otsu local dans le masque.")
-        sensitivity = st.slider(
-            "Ajustement seuil (niveaux)", -30, 30, -10, 5,
-            help="0 = seuil Otsu automatique (recommandé).\n"
-                 "Valeur négative → seuil plus bas → détecte plus de voids.\n"
-                 "Valeur positive → seuil plus haut → détecte moins de voids.\n"
-                 "Physique RX : voids = zones MOINS SOMBRES que la soudure dense.")
-        min_void_px = st.slider(
-            "Taille min. void (px)", 20, 1000, 50, 10,
-            help="Blobs plus petits que cette surface sont ignorés.\n"
-                 "100px = défaut. Augmentez pour filtrer le bruit de fond.")
+        st.markdown("---")
+        st.markdown("### 🎯 Détection")
+        st.caption("Ajustement seuil")
+        sensitivity = st.slider("sens", -30, 30, -10, 5, label_visibility="collapsed",
+            help="Négatif = plus de voids, Positif = moins")
+        st.caption("Taille min. void (px)")
+        min_void_px = st.slider("minv", 20, 1000, 50, 10, label_visibility="collapsed",
+            help="Blobs plus petits ignorés. 50px = défaut.")
         solder_thr = None   # non utilisé dans approche classique
 
     return contrast, brightness, sharpen, filter_geo, sensitivity, min_void_px
@@ -385,7 +375,7 @@ def show_archive():
         csv  = pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
         st.download_button("📥 Exporter CSV", csv, "archive_voids.csv",
                            "text/csv", use_container_width=True)
-    st.divider()
+    st.markdown("---")
     def bc(v,t1,t2): return "🟢" if v<t1 else ("🟡" if v<t2 else "🔴")
     for i, e in enumerate(archive):
         ci, cd, cdl = st.columns([1,3,1])
@@ -405,7 +395,7 @@ def show_archive():
             st.download_button("📥 PNG", e["img_bytes"],
                                f"analyse_{e['fichier']}", "image/png",
                                use_container_width=True, key=f"dl_{i}")
-        st.divider()
+        st.markdown("---")
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
@@ -422,27 +412,46 @@ def main():
     # ══ ANALYSE ═══════════════════════════════════════════════════════════════
     with tab_a:
 
-        # 1. Image RX
-        st.subheader("1️⃣ Charger l'image RX")
-        up_img = st.file_uploader("Image RX (.png / .jpg / .jpeg)",
-                                  type=["png","jpg","jpeg"])
+        # Uploaders côte à côte + ordre flexible
+        st.markdown("### 📥 Charger les fichiers")
+        _c1, _c2 = st.columns(2)
+        with _c1:
+            up_img = st.file_uploader("Image RX", type=["png","jpg","jpeg"], 
+                                     key="up_img")
+        with _c2:
+            up_mask = st.file_uploader("Masque (optionnel)", 
+                                      type=["png","jpg","jpeg"], key="up_mask")
+
+        # Charger masque (si fourni, sinon dessin manuel plus tard)
+        mask = None
+        if up_mask is not None:
+            raw_m = np.frombuffer(up_mask.read(), np.uint8)
+            mask_bgr = cv2.imdecode(raw_m, cv2.IMREAD_COLOR)
+            mask = cv2.cvtColor(mask_bgr, cv2.COLOR_BGR2RGB)
+            st.session_state["uploaded_mask"] = mask
+            st.success(f"✅ Masque chargé : {mask.shape[1]}×{mask.shape[0]} px")
+        elif "uploaded_mask" in st.session_state:
+            mask = st.session_state["uploaded_mask"]
+            st.info("ℹ️ Masque précédent conservé")
+
+        # Charger image RX
         if up_img is None:
+            st.info("👆 Chargez une image RX pour commencer")
             st.stop()
 
-        raw       = np.frombuffer(up_img.read(), np.uint8)
-        img_bgr   = cv2.imdecode(raw, cv2.IMREAD_COLOR)
+        raw = np.frombuffer(up_img.read(), np.uint8)
+        img_bgr = cv2.imdecode(raw, cv2.IMREAD_COLOR)
         image_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-
-        # Stocker pour preview sidebar live
         st.session_state["img_ref_for_preview"] = image_rgb
 
-        # 2. Masque
-        mask = mask_panel(image_rgb)
+        # Si pas de masque uploadé → dessin manuel
         if mask is None:
-            st.stop()
+            mask = mask_panel(image_rgb)
+            if mask is None:
+                st.stop()
 
         # 3. Analyse
-        st.subheader("3️⃣ Lancer l'analyse")
+        st.markdown("### 3️⃣ Analyse")
         if st.button("🚀 Analyser", type="primary", use_container_width=True):
             with st.spinner("🔄 Analyse en cours…"):
                 vis_image, results, proc_img = process_image(
@@ -465,7 +474,7 @@ def main():
             fname     = st.session_state.get("last_fname","image.png")
 
             st.success("✅ Analyse terminée!")
-            st.subheader("4️⃣ Résultats")
+            st.markdown("### 4️⃣ Résultats")
 
             tab_vis, tab_pre, tab_cumul = st.tabs(
                 ["🖼️ Analyse", "🔬 Prétraitement", "📊 Cumul résultats"])
@@ -483,7 +492,7 @@ def main():
                     st.image(st.session_state["vis_image"], use_container_width=True)
 
                 # ── Correction manuelle par clic AUTOMATIQUE ──────────────────
-                st.divider()
+                st.markdown("---")
                 st.markdown("**✏️ Correction manuelle — cliquez directement sur l'image**")
 
                 void_mask_edit = st.session_state["results"].get("void_mask")
@@ -522,14 +531,16 @@ def main():
                         ov_x = int(np.clip(_x_disp * _W_nat / _DISP_W, 0, _W_nat - 1))
                         ov_y = int(np.clip(_y_disp * _H_nat / _DISP_H, 0, _H_nat - 1))
                         
-                        # Éviter la boucle : comparer avec le dernier clic traité
-                        _last_processed = st.session_state.get("last_processed_click", None)
-                        _current_click = (ov_x, ov_y, ov_action)
+                        # Éviter la boucle : ne traiter que si coords ont réellement changé
+                        _last_x = st.session_state.get("last_click_x_processed", -999)
+                        _last_y = st.session_state.get("last_click_y_processed", -999)
+                        _last_mode = st.session_state.get("last_click_mode", "")
                         
-                        if _last_processed != _current_click:
-                            # NOUVEAU clic → traiter
-                            st.session_state["last_processed_click"] = _current_click
-                            st.success(f"🎯 Clic : **X={ov_x}  Y={ov_y}** → traitement...")
+                        if (ov_x != _last_x) or (ov_y != _last_y) or (ov_action != _last_mode):
+                            # NOUVEAU clic détecté
+                            st.session_state["last_click_x_processed"] = ov_x
+                            st.session_state["last_click_y_processed"] = ov_y
+                            st.session_state["last_click_mode"] = ov_action
                         
                         # Exécuter l'action IMMÉDIATEMENT
                         from skimage import measure as _meas2
@@ -646,7 +657,7 @@ def main():
                                        use_container_width=False)
 
             # ── Tableau métriques ─────────────────────────────────────────────
-            st.subheader("📊 Résultats de l'analyse")
+            st.markdown("#### 📊 Métriques")
             # Recalculer les métriques depuis le void_mask courant (peut avoir été édité)
             _cur_vm = st.session_state["results"].get("void_mask")
             if _cur_vm is not None and _cur_vm.any():
