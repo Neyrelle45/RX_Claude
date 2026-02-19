@@ -226,75 +226,53 @@ def sidebar(image_rgb_ref):
     return contrast, brightness, sharpen, filter_geo, sensitivity, min_void_px
 
 # ─── MASQUE ───────────────────────────────────────────────────────────────────
-def mask_panel(image_rgb):
+def mask_panel(image_rgb, uploaded_mask_raw):
+    """Ajustement du masque uploadé (sans uploader ici)."""
+    if uploaded_mask_raw is None:
+        return None
+    
     H, W = image_rgb.shape[:2]
-    st.subheader("2️⃣ Masque d'inspection")
-
-    col_up, col_leg = st.columns([2, 1])
-    with col_up:
-        up_mask = st.file_uploader("Charger le masque PNG", type=["png"],
-                                   help="Vert (0,255,0)=inspecté · Noir=exclu")
-    with col_leg:
-        st.markdown("""
-**Format PNG :**
-- 🟩 **Vert** `(0,255,0)` → zone inspectée
-- ⬛ **Noir** `(0,0,0)` → zone exclue
-- ⚫ **Trous noirs** dans le vert → exclusions locales (ex: billes BGA)
-
-*Le masque peut avoir des trous noirs pour exclure des zones précises
- à l'intérieur de la zone verte (ex: billes de soudure isolées).*
-        """)
-
-    if up_mask is None:
-        st.info("Chargez un masque PNG pour continuer.")
-        return None
-
-    cache_key = f"mask_raw_{up_mask.name}"
-    if cache_key not in st.session_state:
-        st.session_state[cache_key] = decode_mask_png(up_mask)
-    mask_raw = st.session_state[cache_key]
-
+    mask_raw = uploaded_mask_raw
+    
     if mask_raw.max() == 0:
-        st.error("❌ Aucun pixel vert — vérifiez R=0, G=255, B=0.")
+        st.error("❌ Masque vide")
         return None
 
-    st.markdown("**🔧 Ajustement du masque**")
+    st.markdown("### 2️⃣ Ajustement masque")
     c1,c2,c3,c4 = st.columns(4)
-    with c1: st.caption("↔️ X");      tx    = st.slider("X (%)",     -50,50,  0,1, key="tx")
-    with c2: st.caption("↕️ Y");      ty    = st.slider("Y (%)",     -50,50,  0,1, key="ty")
-    with c3: st.caption("🔄 Angle");  angle = st.slider("Angle (°)",-180,180, 0,1, key="angle")
-    with c4: st.caption("🔍 Échelle");scale = st.slider("Échelle",   0.1,3.0,1.0,.01,key="scale")
+    with c1: st.caption("X"); tx = st.slider("tx", -50, 50, 0, 1, label_visibility="collapsed")
+    with c2: st.caption("Y"); ty = st.slider("ty", -50, 50, 0, 1, label_visibility="collapsed")
+    with c3: st.caption("Angle"); angle = st.slider("ang", -180, 180, 0, 1, label_visibility="collapsed")
+    with c4: st.caption("Échelle"); scale = st.slider("sc", 0.1, 3.0, 1.0, 0.01, label_visibility="collapsed")
 
     cr, ci = st.columns([1,3])
     with cr:
-        if st.button("↺ Réinitialiser", use_container_width=True):
-            for k in ["tx","ty","angle"]: st.session_state[k]=0
-            st.session_state["scale"]=1.0
+        if st.button("↺ Reset", use_container_width=True):
+            for k in ["tx","ty","ang"]: 
+                if k in st.session_state: st.session_state[k]=0
+            if "sc" in st.session_state: st.session_state["sc"]=1.0
             st.rerun()
     with ci:
         pct_src = mask_raw.mean()/255*100
-        st.caption(f"Source : {mask_raw.shape[1]}×{mask_raw.shape[0]} px · "
-                   f"{pct_src:.1f}% vert")
+        st.caption(f"Source : {mask_raw.shape[1]}×{mask_raw.shape[0]} px · {pct_src:.1f}% vert")
 
     mask_color = transform_mask(mask_raw, H, W, tx, ty, scale, angle)
     pct = (mask_color[:,:,1]>100).mean()*100
     if pct < 0.5:
-        st.warning("⚠️ Masque hors image — ajustez X/Y ou l'échelle.")
+        st.warning("⚠️ Masque hors image")
 
     cp1, cp2 = st.columns(2)
     with cp1:
         st.image(overlay_preview(image_rgb, mask_color),
-                 caption=f"Prévisualisation — {pct:.1f}% de la surface inspectée",
+                 caption=f"Preview — {pct:.1f}% inspecté",
                  use_container_width=True)
     with cp2:
         disp = np.zeros((H,W,3), dtype=np.uint8)
         disp[:,:,1] = mask_color[:,:,1]
-        st.image(disp, caption="Masque seul (vert=inspecté, noir=exclu)",
-                 use_container_width=True)
+        st.image(disp, caption="Masque seul", use_container_width=True)
 
     return mask_color
 
-# ─── LÉGENDE ──────────────────────────────────────────────────────────────────
 def show_color_legend():
     st.markdown("""
 <div class="legend-box">
@@ -444,11 +422,21 @@ def main():
         image_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         st.session_state["img_ref_for_preview"] = image_rgb
 
-        # Si pas de masque uploadé → dessin manuel
-        if mask is None:
-            mask = mask_panel(image_rgb)
+        # Traiter le masque avec l'interface d'ajustement
+        if mask is not None:
+            # Décoder si c'est RGB
+            if mask.ndim == 3:
+                mask_gray = ((mask[:,:,1] > 100) & (mask[:,:,2] < 100) & 
+                            (mask[:,:,0] < 100)).astype(np.uint8) * 255
+            else:
+                mask_gray = (mask > 127).astype(np.uint8) * 255
+            
+            mask = mask_panel(image_rgb, mask_gray)
             if mask is None:
                 st.stop()
+        else:
+            st.error("❌ Chargez un masque PNG pour continuer")
+            st.stop()
 
         # 3. Analyse
         st.markdown("### 3️⃣ Analyse")
@@ -531,16 +519,13 @@ def main():
                         ov_x = int(np.clip(_x_disp * _W_nat / _DISP_W, 0, _W_nat - 1))
                         ov_y = int(np.clip(_y_disp * _H_nat / _DISP_H, 0, _H_nat - 1))
                         
-                        # Éviter la boucle : ne traiter que si coords ont réellement changé
-                        _last_x = st.session_state.get("last_click_x_processed", -999)
-                        _last_y = st.session_state.get("last_click_y_processed", -999)
-                        _last_mode = st.session_state.get("last_click_mode", "")
+                        # Éviter boucle : identifier uniquement les NOUVEAUX clics
+                        _action_key = f"{ov_x}_{ov_y}_{ov_action}"
+                        _last_action = st.session_state.get("last_action_executed", "")
                         
-                        if (ov_x != _last_x) or (ov_y != _last_y) or (ov_action != _last_mode):
-                            # NOUVEAU clic détecté
-                            st.session_state["last_click_x_processed"] = ov_x
-                            st.session_state["last_click_y_processed"] = ov_y
-                            st.session_state["last_click_mode"] = ov_action
+                        if _action_key != _last_action:
+                            # Marquer IMMÉDIATEMENT pour éviter double exécution
+                            st.session_state["last_action_executed"] = _action_key
                         
                         # Exécuter l'action IMMÉDIATEMENT
                         from skimage import measure as _meas2
