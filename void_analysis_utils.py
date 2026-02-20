@@ -113,15 +113,14 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
         return np.zeros(gray_image.shape, dtype=bool), 0.0
 
     # ── 1. Normalisation robuste par percentile dans le masque ──────────────
-    # Stable : aucun paramètre sensible côté utilisateur.
-    # Stretch p5→p95 du masque sur [0,255] + CLAHE fixe doux (clip=2, grid=16)
+    # Stretch p2→p98 pour forcer les extrêmes
     vals_raw = gray_image[roi_mask > 0]
-    p5  = float(np.percentile(vals_raw, 5))
-    p95 = float(np.percentile(vals_raw, 95))
+    p2  = float(np.percentile(vals_raw, 2))
+    p98 = float(np.percentile(vals_raw, 98))
     stretched = np.clip(
-        (gray_image.astype(np.float32) - p5) / max(p95 - p5, 1) * 255,
+        (gray_image.astype(np.float32) - p2) / max(p98 - p2, 1) * 255,
         0, 255).astype(np.uint8)
-    _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
+    _clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(16, 16))
     enhanced = _clahe.apply(stretched)
 
     # ── 2. Otsu sur les pixels du masque uniquement ───────────────────────────
@@ -130,7 +129,9 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
                                 cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     thr = float(thr_otsu) + float(sensitivity)
 
-    # ── 3. Voids = pixels > seuil dans le masque ─────────────────────────────
+    # ── 3. Voids = pixels CLAIRS (> seuil) en RX ─────────────────────────────
+    # PHYSIQUE RX : zones claires = peu de métal (RX traversent) = VOIDS
+    #               zones sombres = métal dense (RX absorbés) = SOUDURE
     void_raw = (enhanced.astype(np.float32) > thr) & (roi_mask > 0)
 
     # ── 4. Morphologie ────────────────────────────────────────────────────────
@@ -257,11 +258,14 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
                       if len(uniq) else total_mask
         ratio_local = r.area / max(parent_size, 1)
 
-        if ar < 0.25 and ecc > 0.95:   # barre / ligne fine
+        # Rejets géométriques renforcés
+        if ar < 0.20 and ecc > 0.96:   # barre très fine
             continue
-        if circ < 0.10 and ar < 0.30:  # rectangle plat
+        if circ < 0.08 and ar < 0.25:  # rectangle très plat
             continue
-        if ratio_local > 0.45:          # > 45% du pad = artefact global
+        if circ > 0.85 and ar > 0.85 and r.area > 500:  # cercle parfait ET grand = bille BGA
+            continue
+        if ratio_local > 0.45:          # > 45% du pad = artefact
             continue
         filtered[labeled == r.label] = 1
 
@@ -273,24 +277,23 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
 def smart_add_void(gray_image, roi_mask, current_void_mask, click_y, click_x):
     """
     Ajoute un void en trouvant la région connexe CLAIRE qui contient le point cliqué.
-    Utilise le même seuil Otsu que la détection principale.
-    Si le blob est complexe (void+piste fusionnés), isole le pétale contenant le clic
-    via watershed par distance transform.
+    En RX : voids = zones claires (rayons X traversent facilement).
     """
-    # Normalisation robuste identique à detect_voids_threshold
+    # Normalisation identique à detect_voids_threshold
     vals_raw = gray_image[roi_mask > 0]
-    p5  = float(np.percentile(vals_raw, 5))
-    p95 = float(np.percentile(vals_raw, 95))
+    p2  = float(np.percentile(vals_raw, 2))
+    p98 = float(np.percentile(vals_raw, 98))
     stretched = np.clip(
-        (gray_image.astype(np.float32) - p5) / max(p95 - p5, 1) * 255,
+        (gray_image.astype(np.float32) - p2) / max(p98 - p2, 1) * 255,
         0, 255).astype(np.uint8)
-    _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
+    _clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(16, 16))
     enhanced = _clahe.apply(stretched)
 
     vals   = enhanced[roi_mask > 0].reshape(-1, 1).astype(np.uint8)
     thr, _ = cv2.threshold(vals, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     thr    = float(thr)
 
+    # Voids = zones CLAIRES (> seuil)
     bright  = (enhanced.astype(np.float32) > thr) & (roi_mask > 0)
     labeled = measure.label(bright.astype(np.uint8), connectivity=2)
 
