@@ -423,10 +423,11 @@ def analyze_voids(prediction, inspection_mask,
 def create_visualization(original_image, prediction, inspection_mask,
                          analysis_results):
     """
-    Rendu 3 zones :
-      🟢 Vert  — Soudure présente
+    Rendu avec transparence :
+      🟢 Vert 50% alpha — Soudure présente (texture visible)
       🔴 Rouge — Void / manque
       ⬛ Noir  — Zone exclue
+    + Auto-crop sur zone d'inspection
     """
     if original_image.ndim == 2:
         base = cv2.cvtColor(original_image, cv2.COLOR_GRAY2RGB)
@@ -441,6 +442,9 @@ def create_visualization(original_image, prediction, inspection_mask,
     if void_mask is None:
         void_mask = np.zeros(inspection_mask.shape, dtype=bool)
 
+    # FIX: voids SEULEMENT dans la zone inspectée (pas dans les exclusions)
+    void_mask = void_mask & (inspection_mask > 0)
+    
     solder_present = solder_zone & ~void_mask
     exclu          = (inspection_mask == 0)
 
@@ -449,13 +453,15 @@ def create_visualization(original_image, prediction, inspection_mask,
     # Noir absolu hors masque
     result[exclu] = 0
 
-    # Vert : soudure présente (texture image visible dessous)
+    # Vert TRANSPARENT (50% alpha) : on voit l'image originale dessous
     if solder_present.any():
-        result[solder_present, 0] = np.clip(result[solder_present, 0] * 0.10, 0, 70)
-        result[solder_present, 1] = np.clip(result[solder_present, 1] * 0.35 + 115, 0, 210)
-        result[solder_present, 2] = np.clip(result[solder_present, 2] * 0.10, 0, 70)
+        # Blending: 50% vert + 50% image originale
+        green_overlay = np.zeros_like(result)
+        green_overlay[solder_present] = [0, 180, 0]  # Vert pur
+        result[solder_present] = (0.5 * result[solder_present] + 
+                                  0.5 * green_overlay[solder_present])
 
-    # Rouge vif : voids
+    # Rouge vif : voids (opaque)
     if void_mask.any():
         result[void_mask, 0] = 235
         result[void_mask, 1] = 15
@@ -482,6 +488,22 @@ def create_visualization(original_image, prediction, inspection_mask,
             cy, cx = map(int, analysis_results["largest_void_centroid"])
             cv2.line(result, (cx-16, cy), (cx+16, cy), (80, 220, 255), 2)
             cv2.line(result, (cx, cy-16), (cx, cy+16), (80, 220, 255), 2)
+
+    # AUTO-CROP : zoom sur la zone d'inspection (supprime le noir externe)
+    if inspection_mask.any():
+        ys, xs = np.where(inspection_mask > 0)
+        if len(ys) > 0 and len(xs) > 0:
+            y_min, y_max = int(ys.min()), int(ys.max()) + 1
+            x_min, x_max = int(xs.min()), int(xs.max()) + 1
+            # Marge de 5% pour ne pas couper les contours
+            h, w = result.shape[:2]
+            margin_y = max(5, int((y_max - y_min) * 0.05))
+            margin_x = max(5, int((x_max - x_min) * 0.05))
+            y_min = max(0, y_min - margin_y)
+            y_max = min(h, y_max + margin_y)
+            x_min = max(0, x_min - margin_x)
+            x_max = min(w, x_max + margin_x)
+            result = result[y_min:y_max, x_min:x_max]
 
     return result
 
