@@ -258,14 +258,14 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
                       if len(uniq) else total_mask
         ratio_local = r.area / max(parent_size, 1)
 
-        # Rejets géométriques renforcés
-        if ar < 0.20 and ecc > 0.96:   # barre très fine
+        # Rejets géométriques assouplis pour ne pas rater les vrais voids
+        if ar < 0.15 and ecc > 0.97:   # barre extrêmement fine
             continue
-        if circ < 0.08 and ar < 0.25:  # rectangle très plat
+        if circ < 0.05 and ar < 0.20:  # rectangle très très plat
             continue
-        if circ > 0.85 and ar > 0.85 and r.area > 500:  # cercle parfait ET grand = bille BGA
+        if circ > 0.90 and ar > 0.90 and r.area > 800:  # cercle quasi-parfait ET très grand = bille BGA
             continue
-        if ratio_local > 0.45:          # > 45% du pad = artefact
+        if ratio_local > 0.50:          # > 50% du pad = artefact
             continue
         filtered[labeled == r.label] = 1
 
@@ -421,13 +421,13 @@ def analyze_voids(prediction, inspection_mask,
 # ─── Visualisation ────────────────────────────────────────────────────────────
 
 def create_visualization(original_image, prediction, inspection_mask,
-                         analysis_results):
+                         analysis_results, no_crop=False):
     """
     Rendu avec transparence :
       🟢 Vert 50% alpha — Soudure présente (texture visible)
       🔴 Rouge — Void / manque
       ⬛ Noir  — Zone exclue
-    + Auto-crop sur zone d'inspection
+    + Auto-crop sur zone d'inspection (sauf si no_crop=True pour correction manuelle)
     """
     if original_image.ndim == 2:
         base = cv2.cvtColor(original_image, cv2.COLOR_GRAY2RGB)
@@ -489,8 +489,8 @@ def create_visualization(original_image, prediction, inspection_mask,
             cv2.line(result, (cx-16, cy), (cx+16, cy), (80, 220, 255), 2)
             cv2.line(result, (cx, cy-16), (cx, cy+16), (80, 220, 255), 2)
 
-    # AUTO-CROP : zoom sur la zone d'inspection (supprime le noir externe)
-    if inspection_mask.any():
+    # AUTO-CROP : zoom sur la zone d'inspection (sauf si no_crop pour correction manuelle)
+    if not no_crop and inspection_mask.any():
         ys, xs = np.where(inspection_mask > 0)
         if len(ys) > 0 and len(xs) > 0:
             y_min, y_max = int(ys.min()), int(ys.max()) + 1
