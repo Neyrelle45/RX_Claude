@@ -218,6 +218,8 @@ def sidebar(image_rgb_ref):
         st.caption("Ajustement seuil")
         sensitivity = st.slider("sens", -30, 30, 0, 5, label_visibility="collapsed",
             help="Négatif = plus de voids (seuil plus bas), Positif = moins de voids (seuil plus haut)")
+        if sensitivity == 0:
+            st.caption("💡 Tout rouge ? → Augmentez le seuil (+10 à +20)")
         st.caption("Taille min. void (px)")
         min_void_px = st.slider("minv", 10, 1000, 30, 10, label_visibility="collapsed",
             help="Blobs plus petits ignorés. 30px = défaut.")
