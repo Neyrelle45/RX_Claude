@@ -373,7 +373,7 @@ def analyze_voids(prediction, inspection_mask,
     n_voids  = int(np.sum(void_mask))
     void_ratio = n_voids / n_solder * 100 if n_solder > 0 else 0.0
 
-    # Plus gros void ne touchant pas le bord du masque
+    # Plus gros void ne touchant pas le bord du masque (% sur surface TOTALE inspectée)
     lv_area=0; lv_ratio=0.0; lv_bbox=None; lv_centroid=None
     if void_mask.any():
         labeled  = measure.label(void_mask.astype(np.uint8), connectivity=2)
@@ -395,7 +395,8 @@ def analyze_voids(prediction, inspection_mask,
         if interior:
             lv = max(interior, key=lambda r: r.area)
             lv_area     = lv.area
-            lv_ratio    = lv_area / n_solder * 100 if n_solder > 0 else 0.0
+            # CRITIQUE: % par rapport à la surface TOTALE inspectée, pas la soudure
+            lv_ratio    = lv_area / total * 100 if total > 0 else 0.0
             lv_bbox     = lv.bbox
             lv_centroid = lv.centroid
 
