@@ -228,14 +228,23 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
     except Exception:
         pass  # si scipy absent, continuer sans séparation
 
+    # Init debug info
+    debug_info = {
+        "pixels_bruts": 0,
+        "pixels_morph": 0,
+        "blobs_avant": 0,
+        "blobs_apres": 0,
+        "rejets": []
+    }
+    
     # ── 6. Filtre taille + forme ──────────────────────────────────────────────
     # DEBUG: Logging pour diagnostiquer 0 détection
-    print(f"[DEBUG] Pixels voids bruts (après Otsu): {void_raw.sum()}")
-    print(f"[DEBUG] Pixels après morphologie: {cleaned.sum()}")
+    debug_info["pixels_bruts"] = int(void_raw.sum())
+    debug_info["pixels_morph"] = int(cleaned.sum())
     
     labeled = measure.label(cleaned, connectivity=2)
     n_blobs_before = int(labeled.max())
-    print(f"[DEBUG] Blobs avant filtrage géométrique: {n_blobs_before}")
+    debug_info["blobs_avant"] = n_blobs_before
     
     filtered = np.zeros_like(cleaned)
 
@@ -266,24 +275,27 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
         # Filtres réactivés avec seuils TRES permissifs
         # 1. Rejeter blobs GIGANTESQUES (probablement tout le fond du pad)
         if ratio_local > 0.40:  # > 40% du pad total = artefact
-            print(f"[DEBUG] Blob {r.label} rejeté: ratio_local={ratio_local:.3f} > 0.40")
+            debug_info["rejets"].append(f"Blob {r.label}: ratio={ratio_local:.3f}")
             continue
         # 2. Barres/rectangles extrêmes seulement
         if ar < 0.10 and ecc > 0.98:   # barre ultra-fine
-            print(f"[DEBUG] Blob {r.label} rejeté: barre fine AR={ar:.2f}")
+            debug_info["rejets"].append(f"Blob {r.label}: barre AR={ar:.2f}")
             continue
         if circ < 0.03 and ar < 0.15:  # rectangle ultra-plat
-            print(f"[DEBUG] Blob {r.label} rejeté: rectangle plat circ={circ:.2f}")
+            debug_info["rejets"].append(f"Blob {r.label}: rect circ={circ:.2f}")
             continue
         # 3. BGA : cercles parfaits ET grands
         if circ > 0.85 and ar > 0.85 and r.area > 500:
-            print(f"[DEBUG] Blob {r.label} rejeté: cercle parfait circ={circ:.2f} AR={ar:.2f}")
+            debug_info["rejets"].append(f"Blob {r.label}: cercle circ={circ:.2f} AR={ar:.2f}")
             continue
         filtered[labeled == r.label] = 1
 
     n_blobs_final = int(measure.label(filtered).max())
-    print(f"[DEBUG] Blobs APRÈS filtrage géométrique: {n_blobs_final}")
-    print(f"[DEBUG] Pixels voids finaux: {filtered.sum()}")
+    debug_info["blobs_apres"] = n_blobs_final
+    debug_info["pixels_final"] = int(filtered.sum())
+    
+    if return_debug:
+        return filtered.astype(bool), float(thr), debug_info
     return filtered.astype(bool), float(thr)
 
 
@@ -370,15 +382,17 @@ def analyze_voids(prediction, inspection_mask,
     total = int(np.sum(inspection_mask > 0))
 
     if gray_image is not None:
-        void_mask, void_thr = detect_voids_threshold(
+        void_mask, void_thr, debug_info = detect_voids_threshold(
             gray_image,
             inspection_mask.astype(np.uint8),
             sensitivity=sensitivity,
-            min_void_px=min_void_px)
+            min_void_px=min_void_px,
+            return_debug=True)
     else:
         # Aucune image grise → pas de détection possible
         void_mask = np.zeros(inspection_mask.shape, dtype=bool)
         void_thr  = 0.0
+        debug_info = {}
 
     solder_zone    = (inspection_mask > 0)
     solder_present = solder_zone & ~void_mask
@@ -431,6 +445,7 @@ def analyze_voids(prediction, inspection_mask,
         void_mask=void_mask,
         void_threshold_used=float(void_thr),
         solder_threshold_used=0.0,
+        debug_info=debug_info,  # Info de debug pour diagnostic
     )
 
 
