@@ -113,14 +113,14 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
         return np.zeros(gray_image.shape, dtype=bool), 0.0
 
     # ── 1. Normalisation robuste par percentile dans le masque ──────────────
-    # Stretch p2→p98 pour forcer les extrêmes
+    # Stretch p5→p95 (équilibre entre contraste et stabilité)
     vals_raw = gray_image[roi_mask > 0]
-    p2  = float(np.percentile(vals_raw, 2))
-    p98 = float(np.percentile(vals_raw, 98))
+    p5  = float(np.percentile(vals_raw, 5))
+    p95 = float(np.percentile(vals_raw, 95))
     stretched = np.clip(
-        (gray_image.astype(np.float32) - p2) / max(p98 - p2, 1) * 255,
+        (gray_image.astype(np.float32) - p5) / max(p95 - p5, 1) * 255,
         0, 255).astype(np.uint8)
-    _clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(16, 16))
+    _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
     enhanced = _clahe.apply(stretched)
 
     # ── 2. Otsu sur les pixels du masque uniquement ───────────────────────────
@@ -281,12 +281,12 @@ def smart_add_void(gray_image, roi_mask, current_void_mask, click_y, click_x):
     """
     # Normalisation identique à detect_voids_threshold
     vals_raw = gray_image[roi_mask > 0]
-    p2  = float(np.percentile(vals_raw, 2))
-    p98 = float(np.percentile(vals_raw, 98))
+    p5  = float(np.percentile(vals_raw, 5))
+    p95 = float(np.percentile(vals_raw, 95))
     stretched = np.clip(
-        (gray_image.astype(np.float32) - p2) / max(p98 - p2, 1) * 255,
+        (gray_image.astype(np.float32) - p5) / max(p95 - p5, 1) * 255,
         0, 255).astype(np.uint8)
-    _clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(16, 16))
+    _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
     enhanced = _clahe.apply(stretched)
 
     vals   = enhanced[roi_mask > 0].reshape(-1, 1).astype(np.uint8)
