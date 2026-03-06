@@ -93,7 +93,7 @@ def remove_padding_and_restore(pred_padded, transform):
 
 # ─── Détection voids — algorithme classique ───────────────────────────────────
 
-def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100):
+def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100, return_debug=False):
     """
     Détection classique validée sur 8 images RX labelisées.
 
@@ -105,9 +105,11 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
                        >0 = seuil plus haut → moins de voids (moins sensible)
                        <0 = seuil plus bas  → plus de voids  (plus sensible)
         min_void_px  : taille minimale d'un void en pixels (défaut 100)
+        return_debug : si True, retourne aussi un dict de debug
 
     Returns:
-        void_mask (bool H×W), seuil_utilisé (float)
+        Si return_debug=False: void_mask (bool H×W), seuil_utilisé (float)
+        Si return_debug=True: void_mask, seuil_utilisé, debug_dict
     """
     # Init debug info dès le début
     debug_info = {
