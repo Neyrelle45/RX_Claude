@@ -562,14 +562,13 @@ def main():
                     _coords = None
                     try:
                         from streamlit_image_coordinates import streamlit_image_coordinates
+                        # streamlit_image_coordinates affiche toujours l'image
                         _coords = streamlit_image_coordinates(_vis_pil, key="image_coords")
                     except (ImportError, Exception):
-                        pass
-                    
-                    # Toujours afficher l'image en fallback si coords None
-                    if _coords is None:
+                        # Si le package n'existe pas, afficher l'image statique
                         st.image(_vis_pil, use_container_width=False, width=_DISP_W,
-                                caption="📍 Cliquez sur la zone")
+                                caption="📍 Package streamlit-image-coordinates manquant")
+                        _coords = None
 
                     # ── ACTION AU CLIC (avec offset correction) ───────────────
                     if _coords is not None:
