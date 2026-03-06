@@ -243,7 +243,7 @@ def mask_panel(image_rgb, uploaded_mask_raw):
     with c1: st.caption("X"); tx = st.slider("tx", -50, 50, 0, 1, label_visibility="collapsed")
     with c2: st.caption("Y"); ty = st.slider("ty", -50, 50, 0, 1, label_visibility="collapsed")
     with c3: st.caption("Angle"); angle = st.slider("ang", -180, 180, 0, 1, label_visibility="collapsed")
-    with c4: st.caption("Échelle"); scale = st.slider("sc", 0.1, 3.0, 1.0, 0.01, label_visibility="collapsed")
+    with c4: st.caption("Échelle"); scale = st.slider("sc", 0.1, 4.0, 1.0, 0.01, label_visibility="collapsed")
 
     cr, ci = st.columns([1,3])
     with cr:
