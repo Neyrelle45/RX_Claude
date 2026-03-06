@@ -658,16 +658,19 @@ def main():
             _cur_vm = st.session_state["results"].get("void_mask")
             if _cur_vm is not None and _cur_vm.any():
                 from skimage import measure as _meas_m
-                _n_sol   = int(st.session_state["results"].get("solder_area",
-                               st.session_state["results"].get("total_inspection_area",1)))
+                # Surface totale inspectée (fixe, ne change pas avec les corrections)
+                _n_total = int(st.session_state["results"].get("total_inspection_area", 1))
                 _n_v     = int(_cur_vm.sum())
-                _vr_live = _n_v / max(_n_sol,1) * 100
-                # Recalculer le plus gros void intérieur
+                _vr_live = _n_v / max(_n_total, 1) * 100
+                
+                # Recalculer le plus gros void intérieur (% de la surface TOTALE inspectée)
                 _lbl_m   = _meas_m.label(_cur_vm.astype(np.uint8), connectivity=2)
                 _big_r   = 0.0
+                _big_area = 0
                 for _rm in _meas_m.regionprops(_lbl_m):
-                    if _rm.area / max(_n_sol,1) * 100 > _big_r:
-                        _big_r = _rm.area / max(_n_sol,1) * 100
+                    if _rm.area > _big_area:
+                        _big_area = _rm.area
+                        _big_r = _rm.area / max(_n_total, 1) * 100
                 _lr_live = _big_r
                 _nv_live = int(_lbl_m.max())
             else:
