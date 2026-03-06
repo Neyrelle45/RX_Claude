@@ -109,7 +109,18 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
     Returns:
         void_mask (bool H×W), seuil_utilisé (float)
     """
+    # Init debug info dès le début
+    debug_info = {
+        "pixels_bruts": 0,
+        "pixels_morph": 0,
+        "blobs_avant": 0,
+        "blobs_apres": 0,
+        "rejets": []
+    }
+    
     if not roi_mask.any():
+        if return_debug:
+            return np.zeros(gray_image.shape, dtype=bool), 0.0, debug_info
         return np.zeros(gray_image.shape, dtype=bool), 0.0
 
     # ── 1. Normalisation robuste par percentile dans le masque ──────────────
@@ -228,15 +239,6 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
     except Exception:
         pass  # si scipy absent, continuer sans séparation
 
-    # Init debug info
-    debug_info = {
-        "pixels_bruts": 0,
-        "pixels_morph": 0,
-        "blobs_avant": 0,
-        "blobs_apres": 0,
-        "rejets": []
-    }
-    
     # ── 6. Filtre taille + forme ──────────────────────────────────────────────
     # DEBUG: Logging pour diagnostiquer 0 détection
     debug_info["pixels_bruts"] = int(void_raw.sum())
