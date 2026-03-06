@@ -272,6 +272,7 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100,
 
         # Ratio par rapport à la surface TOTALE inspectée
         # (pas le composant local qui peut être fragmenté par des exclusions)
+        # VERSION 2024-03-06 FIX RATIO
         ratio_local = r.area / max(total_mask, 1)
 
         # Filtres réactivés avec seuils TRES permissifs
