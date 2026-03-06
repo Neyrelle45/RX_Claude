@@ -464,6 +464,22 @@ def main():
             fname     = st.session_state.get("last_fname","image.png")
 
             st.success("✅ Analyse terminée!")
+            
+            # Afficher debug info si 0 void détecté
+            debug = results.get("debug_info", {})
+            if debug and results.get("num_voids", 0) == 0:
+                with st.expander("🔍 Debug : Pourquoi 0 void détecté ?", expanded=True):
+                    st.warning("⚠️ Aucun void détecté — voici le diagnostic :")
+                    st.write(f"**Pixels détectés (Otsu brut)** : {debug.get('pixels_bruts', 0):,} px")
+                    st.write(f"**Après morphologie** : {debug.get('pixels_morph', 0):,} px")
+                    st.write(f"**Blobs avant filtrage** : {debug.get('blobs_avant', 0)}")
+                    st.write(f"**Blobs après filtrage** : {debug.get('blobs_apres', 0)}")
+                    if debug.get('rejets'):
+                        st.write(f"**Blobs rejetés** ({len(debug['rejets'])}) :")
+                        for rejet in debug['rejets'][:10]:  # Max 10 premiers
+                            st.caption(f"  • {rejet}")
+                    st.info("💡 **Solutions** : Ajustez Sensibilité (+10 à +20) ou Taille min (20px)")
+            
             st.markdown("### 4️⃣ Résultats")
 
             tab_vis, tab_pre, tab_cumul = st.tabs(
