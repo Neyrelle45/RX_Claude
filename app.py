@@ -6,6 +6,7 @@ import tempfile
 import json
 from datetime import datetime
 
+# VERSION 2024-03-06-v2 - Fix ratio calculations
 import cv2
 import numpy as np
 from PIL import Image
@@ -728,34 +729,23 @@ def main():
                 _nv_live = st.session_state["results"].get("num_voids", 0)
             vr = _vr_live; lr = _lr_live; nv = _nv_live
 
-            def status(v,t1,t2):
-                return "✅ Bon" if v<t1 else ("⚠️ Acceptable" if v<t2 else "❌ Non conforme")
-
+            # Tableau sans seuils ni jugements (varient selon clients)
             df = pd.DataFrame([
-                {"Métrique":"Taux de manque global",       "Valeur":f"{vr:.2f}%",
-                 "Seuil conforme":"< 5%","Seuil acceptable":"< 15%",
-                 "Statut":status(vr,5,15)},
-                {"Métrique":"Plus gros void (intérieur)",  "Valeur":f"{lr:.2f}%",
-                 "Seuil conforme":"< 2%","Seuil acceptable":"< 5%",
-                 "Statut":status(lr,2,5)},
-                {"Métrique":"Nombre de voids détectés",    "Valeur":str(nv),
-                 "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
+                {"Métrique":"Taux de manque global",       "Valeur":f"{vr:.2f}%"},
+                {"Métrique":"Plus gros void (intérieur)",  "Valeur":f"{lr:.2f}%"},
+                {"Métrique":"Nombre de voids détectés",    "Valeur":str(nv)},
                 {"Métrique":"Surface inspectée",
-                 "Valeur":f"{results['total_inspection_area']:,} px",
-                 "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
+                 "Valeur":f"{results['total_inspection_area']:,} px"},
                 {"Métrique":"Surface soudure",
-                 "Valeur":f"{results.get('solder_area',results.get('voids_area',0)):,} px",
-                 "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
+                 "Valeur":f"{results.get('solder_area',results.get('voids_area',0)):,} px"},
                 {"Métrique":"Surface voids",
-                 "Valeur":f"{results['voids_area']:,} px",
-                 "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
+                 "Valeur":f"{results['voids_area']:,} px"},
                 {"Métrique":"Sensibilité utilisée",
-                 "Valeur":f"{results.get('void_threshold_used',0):.1f} px gris",
-                 "Seuil conforme":"—","Seuil acceptable":"—","Statut":"ℹ️"},
+                 "Valeur":f"{results.get('void_threshold_used',0):.1f} px gris"},
             ])
             st.dataframe(df, use_container_width=True, hide_index=True)
 
-            # Badges
+            # Badges (se mettent à jour avec corrections manuelles)
             def badge(v,t1,t2):
                 return ("ok","✅") if v<t1 else (("warn","⚠️") if v<t2 else ("bad","❌"))
             cg,ig = badge(vr,5,15); cl,il = badge(lr,2,5)
@@ -788,7 +778,9 @@ def main():
             with a3:
                 if st.button("📥 Archiver ce résultat", use_container_width=True,
                              type="secondary"):
-                    archive_result(fname, results, vis_image)
+                    # Utiliser l'image CORRIGÉE depuis session_state
+                    vis_corrected = st.session_state.get("vis_image", vis_image)
+                    archive_result(fname, st.session_state["results"], vis_corrected)
                     st.success("✅ Archivé ! → onglet 🗄️ Archive")
 
     # ══ ARCHIVE ═══════════════════════════════════════════════════════════════
