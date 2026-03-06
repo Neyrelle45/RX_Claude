@@ -401,9 +401,12 @@ def analyze_voids(prediction, inspection_mask,
     solder_present = solder_zone & ~void_mask
 
     # ── Métriques ─────────────────────────────────────────────────────────────
-    n_solder = int(np.sum(solder_zone))
+    # total = surface totale inspectée (zones vertes du masque, INCLUANT exclusions noires)
+    # n_solder = total (car solder_zone = inspection_mask > 0)
+    n_solder = int(np.sum(solder_zone))  # = total
     n_voids  = int(np.sum(void_mask))
-    void_ratio = n_voids / n_solder * 100 if n_solder > 0 else 0.0
+    # CRITIQUE: ratio sur surface TOTALE (zones vertes uniquement, exclusions noires exclues)
+    void_ratio = n_voids / total * 100 if total > 0 else 0.0
 
     # Plus gros void ne touchant pas le bord du masque (% sur surface TOTALE inspectée)
     lv_area=0; lv_ratio=0.0; lv_bbox=None; lv_centroid=None
@@ -540,6 +543,27 @@ def create_visualization(original_image, prediction, inspection_mask,
             result = result[y_min:y_max, x_min:x_max]
 
     return result
+
+
+# ─── Compat ───────────────────────────────────────────────────────────────────
+
+def detect_solder_zone(prediction, inspection_mask, solder_threshold=None):
+    """Conservé pour compatibilité — retourne simplement le masque complet."""
+    return (inspection_mask > 0), 0.0
+
+
+def filter_geometric_shapes(binary_mask):
+    labeled  = measure.label(binary_mask, connectivity=2)
+    total    = binary_mask.shape[0] * binary_mask.shape[1]
+    filtered = np.zeros_like(binary_mask)
+    for r in measure.regionprops(labeled):
+        if r.perimeter == 0 or r.major_axis_length == 0: continue
+        ar  = r.minor_axis_length / r.major_axis_length
+        ext = r.area / r.bbox_area if r.bbox_area > 0 else 0
+        if not (ar < 0.25 or (ext > 0.88 and ar < 0.55) or
+                r.area / total > 0.25):
+            filtered[labeled == r.label] = 1
+    return filtered
 
 
 # ─── Compat ───────────────────────────────────────────────────────────────────
