@@ -270,15 +270,13 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100,
         circ = 4 * np.pi * r.area / (r.perimeter ** 2 + 1e-6)
         ecc  = r.eccentricity
 
-        blob_comps  = msk_lab[labeled == r.label]
-        uniq, cnt   = np.unique(blob_comps[blob_comps > 0], return_counts=True)
-        parent_size = comp_sizes.get(int(uniq[np.argmax(cnt)]), total_mask) \
-                      if len(uniq) else total_mask
-        ratio_local = r.area / max(parent_size, 1)
+        # Ratio par rapport à la surface TOTALE inspectée
+        # (pas le composant local qui peut être fragmenté par des exclusions)
+        ratio_local = r.area / max(total_mask, 1)
 
         # Filtres réactivés avec seuils TRES permissifs
         # 1. Rejeter blobs GIGANTESQUES (probablement tout le fond du pad)
-        if ratio_local > 0.40:  # > 40% du pad total = artefact
+        if ratio_local > 0.80:  # > 80% de la surface totale = artefact
             debug_info["rejets"].append(f"Blob {r.label}: ratio={ratio_local:.3f}")
             continue
         # 2. Barres/rectangles extrêmes seulement
