@@ -498,19 +498,46 @@ def main():
                          "✅ Ajouter void  (clic vert→rouge)"],
                         horizontal=True, key="ov_action")
 
-                    # Image cliquable - RÉGÉNÉRER SANS CROP pour bon mapping coords
+                    # Image cliquable - CROP + ZOOM sur ROI avec offset tracking
                     from PIL import Image as _PIL2
-                    # Recréer visualization NON croppée
+                    # Recréer visualization NON croppée d'abord
                     _bm_manual = ((mask[:,:,1]>100)&(mask[:,:,2]<100)&
                                   (mask[:,:,0]<100)).astype(np.uint8) \
                                  if mask.ndim==3 else (mask>127).astype(np.uint8)
-                    _vis_uncropped = create_visualization(
+                    _vis_full = create_visualization(
                         image_rgb, None, _bm_manual, 
                         st.session_state["results"], 
-                        no_crop=True  # CRITIQUE: pas de crop pour bon mapping
-                    )
-                    _vis_rgb = _vis_uncropped.astype(np.uint8)
-                    _vis_pil = _PIL2.fromarray(_vis_rgb).resize(
+                        no_crop=True  # Full size pour calculs
+                    ).astype(np.uint8)
+                    
+                    # Calculer bbox de la ROI pour crop + zoom
+                    if _bm_manual.any():
+                        ys, xs = np.where(_bm_manual > 0)
+                        if len(ys) > 0:
+                            y_min, y_max = int(ys.min()), int(ys.max()) + 1
+                            x_min, x_max = int(xs.min()), int(xs.max()) + 1
+                            # Marge 10px
+                            y_min = max(0, y_min - 10)
+                            y_max = min(_H_nat, y_max + 10)
+                            x_min = max(0, x_min - 10)
+                            x_max = min(_W_nat, x_max + 10)
+                            # Crop sur ROI
+                            _vis_cropped = _vis_full[y_min:y_max, x_min:x_max]
+                            _crop_offset_x = x_min
+                            _crop_offset_y = y_min
+                            _crop_w = x_max - x_min
+                            _crop_h = y_max - y_min
+                        else:
+                            _vis_cropped = _vis_full
+                            _crop_offset_x = _crop_offset_y = 0
+                            _crop_w, _crop_h = _W_nat, _H_nat
+                    else:
+                        _vis_cropped = _vis_full
+                        _crop_offset_x = _crop_offset_y = 0
+                        _crop_w, _crop_h = _W_nat, _H_nat
+                    
+                    # Resize pour affichage
+                    _vis_pil = _PIL2.fromarray(_vis_cropped).resize(
                         (_DISP_W, _DISP_H), _PIL2.LANCZOS)
 
                     _coords = None
@@ -523,14 +550,18 @@ def main():
                     # Toujours afficher l'image en fallback si coords None
                     if _coords is None:
                         st.image(_vis_pil, use_container_width=False, width=_DISP_W,
-                                caption="📍 Cliquez pour sélectionner (coords manuelles si package absent)")
+                                caption="📍 Cliquez sur la zone")
 
-                    # ── ACTION AU CLIC (avec protection boucle) ───────────────
+                    # ── ACTION AU CLIC (avec offset correction) ───────────────
                     if _coords is not None:
                         _x_disp = _coords.get("x", 0)
                         _y_disp = _coords.get("y", 0)
-                        ov_x = int(np.clip(_x_disp * _W_nat / _DISP_W, 0, _W_nat - 1))
-                        ov_y = int(np.clip(_y_disp * _H_nat / _DISP_H, 0, _H_nat - 1))
+                        # Convertir coords display → coords dans l'image croppée
+                        _x_crop = int(np.clip(_x_disp * _crop_w / _DISP_W, 0, _crop_w - 1))
+                        _y_crop = int(np.clip(_y_disp * _crop_h / _DISP_H, 0, _crop_h - 1))
+                        # Ajouter offset pour obtenir coords dans l'image NATIVE
+                        ov_x = int(np.clip(_x_crop + _crop_offset_x, 0, _W_nat - 1))
+                        ov_y = int(np.clip(_y_crop + _crop_offset_y, 0, _H_nat - 1))
                         
                         # Éviter boucle : exécuter SEULEMENT si nouveau clic
                         _action_key = f"{ov_x}_{ov_y}_{ov_action}"
