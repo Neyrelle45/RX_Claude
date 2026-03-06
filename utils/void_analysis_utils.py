@@ -229,9 +229,14 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
         pass  # si scipy absent, continuer sans séparation
 
     # ── 6. Filtre taille + forme ──────────────────────────────────────────────
-    # Rejette : barres, lignes, rectangles, blobs géants
-    # Conserve : ronds, ovales, blobs irréguliers
+    # DEBUG: Logging pour diagnostiquer 0 détection
+    print(f"[DEBUG] Pixels voids bruts (après Otsu): {void_raw.sum()}")
+    print(f"[DEBUG] Pixels après morphologie: {cleaned.sum()}")
+    
     labeled = measure.label(cleaned, connectivity=2)
+    n_blobs_before = int(labeled.max())
+    print(f"[DEBUG] Blobs avant filtrage géométrique: {n_blobs_before}")
+    
     filtered = np.zeros_like(cleaned)
 
     # Composants connexes du masque pour ratio local par pad
@@ -260,18 +265,25 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
 
         # Filtres réactivés avec seuils TRES permissifs
         # 1. Rejeter blobs GIGANTESQUES (probablement tout le fond du pad)
-        if ratio_local > 0.40:  # > 40% du pad local = artefact
+        if ratio_local > 0.40:  # > 40% du pad total = artefact
+            print(f"[DEBUG] Blob {r.label} rejeté: ratio_local={ratio_local:.3f} > 0.40")
             continue
         # 2. Barres/rectangles extrêmes seulement
         if ar < 0.10 and ecc > 0.98:   # barre ultra-fine
+            print(f"[DEBUG] Blob {r.label} rejeté: barre fine AR={ar:.2f}")
             continue
         if circ < 0.03 and ar < 0.15:  # rectangle ultra-plat
+            print(f"[DEBUG] Blob {r.label} rejeté: rectangle plat circ={circ:.2f}")
             continue
         # 3. BGA : cercles parfaits ET grands
         if circ > 0.85 and ar > 0.85 and r.area > 500:
+            print(f"[DEBUG] Blob {r.label} rejeté: cercle parfait circ={circ:.2f} AR={ar:.2f}")
             continue
         filtered[labeled == r.label] = 1
 
+    n_blobs_final = int(measure.label(filtered).max())
+    print(f"[DEBUG] Blobs APRÈS filtrage géométrique: {n_blobs_final}")
+    print(f"[DEBUG] Pixels voids finaux: {filtered.sum()}")
     return filtered.astype(bool), float(thr)
 
 
