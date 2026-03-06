@@ -408,32 +408,19 @@ def analyze_voids(prediction, inspection_mask,
     # CRITIQUE: ratio sur surface TOTALE (zones vertes uniquement, exclusions noires exclues)
     void_ratio = n_voids / total * 100 if total > 0 else 0.0
 
-    # Plus gros void ne touchant pas le bord du masque (% sur surface TOTALE inspectée)
+    # Plus gros void (simplement le blob avec la plus grande aire)
     lv_area=0; lv_ratio=0.0; lv_bbox=None; lv_centroid=None
     if void_mask.any():
         labeled  = measure.label(void_mask.astype(np.uint8), connectivity=2)
-        interior = []
+        biggest = None
         for r in measure.regionprops(labeled):
-            mr, mc, xr, xc = r.bbox
-            if (mr < 5 or mc < 5 or
-                    xr > inspection_mask.shape[0]-5 or
-                    xc > inspection_mask.shape[1]-5):
-                continue
-            touch = False
-            for y, x in r.coords[:20]:
-                if (0 < y < inspection_mask.shape[0]-1 and
-                        0 < x < inspection_mask.shape[1]-1):
-                    if np.any(inspection_mask[y-1:y+2, x-1:x+2] == 0):
-                        touch = True; break
-            if not touch:
-                interior.append(r)
-        if interior:
-            lv = max(interior, key=lambda r: r.area)
-            lv_area     = lv.area
-            # CRITIQUE: % par rapport à la surface TOTALE inspectée, pas la soudure
+            if biggest is None or r.area > biggest.area:
+                biggest = r
+        if biggest:
+            lv_area     = biggest.area
             lv_ratio    = lv_area / total * 100 if total > 0 else 0.0
-            lv_bbox     = lv.bbox
-            lv_centroid = lv.centroid
+            lv_bbox     = biggest.bbox
+            lv_centroid = biggest.centroid
 
     num_blobs = int(measure.label(void_mask.astype(np.uint8)).max())
 
@@ -517,14 +504,8 @@ def create_visualization(original_image, prediction, inspection_mask,
                                  cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(result, vc, -1, (255, 255, 255), 1)
 
-    # Cadre + croix : plus gros void intérieur
-    if analysis_results.get("largest_void_bbox") is not None:
-        mr, mc, xr, xc = analysis_results["largest_void_bbox"]
-        cv2.rectangle(result, (mc-3, mr-3), (xc+3, xr+3), (80, 220, 255), 3)
-        if analysis_results.get("largest_void_centroid"):
-            cy, cx = map(int, analysis_results["largest_void_centroid"])
-            cv2.line(result, (cx-16, cy), (cx+16, cy), (80, 220, 255), 2)
-            cv2.line(result, (cx, cy-16), (cx, cy+16), (80, 220, 255), 2)
+    # Plus gros void : calcul gardé mais marquage visuel supprimé
+    # (le calcul se fait dans analyze_voids, pas besoin de le dessiner)
 
     # AUTO-CROP : zoom sur la zone d'inspection (sauf si no_crop pour correction manuelle)
     if not no_crop and inspection_mask.any():
@@ -543,27 +524,6 @@ def create_visualization(original_image, prediction, inspection_mask,
             result = result[y_min:y_max, x_min:x_max]
 
     return result
-
-
-# ─── Compat ───────────────────────────────────────────────────────────────────
-
-def detect_solder_zone(prediction, inspection_mask, solder_threshold=None):
-    """Conservé pour compatibilité — retourne simplement le masque complet."""
-    return (inspection_mask > 0), 0.0
-
-
-def filter_geometric_shapes(binary_mask):
-    labeled  = measure.label(binary_mask, connectivity=2)
-    total    = binary_mask.shape[0] * binary_mask.shape[1]
-    filtered = np.zeros_like(binary_mask)
-    for r in measure.regionprops(labeled):
-        if r.perimeter == 0 or r.major_axis_length == 0: continue
-        ar  = r.minor_axis_length / r.major_axis_length
-        ext = r.area / r.bbox_area if r.bbox_area > 0 else 0
-        if not (ar < 0.25 or (ext > 0.88 and ar < 0.55) or
-                r.area / total > 0.25):
-            filtered[labeled == r.label] = 1
-    return filtered
 
 
 # ─── Compat ───────────────────────────────────────────────────────────────────
