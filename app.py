@@ -216,8 +216,8 @@ def sidebar(image_rgb_ref):
         st.markdown("---")
         st.markdown("### 🎯 Détection")
         st.caption("Ajustement seuil")
-        sensitivity = st.slider("sens", -30, 30, -15, 5, label_visibility="collapsed",
-            help="Négatif = plus de voids, Positif = moins")
+        sensitivity = st.slider("sens", -30, 30, 0, 5, label_visibility="collapsed",
+            help="Négatif = plus de voids (seuil plus bas), Positif = moins de voids (seuil plus haut)")
         st.caption("Taille min. void (px)")
         min_void_px = st.slider("minv", 10, 1000, 30, 10, label_visibility="collapsed",
             help="Blobs plus petits ignorés. 30px = défaut.")
@@ -243,7 +243,7 @@ def mask_panel(image_rgb, uploaded_mask_raw):
     with c1: st.caption("X"); tx = st.slider("tx", -50, 50, 0, 1, label_visibility="collapsed")
     with c2: st.caption("Y"); ty = st.slider("ty", -50, 50, 0, 1, label_visibility="collapsed")
     with c3: st.caption("Angle"); angle = st.slider("ang", -180, 180, 0, 1, label_visibility="collapsed")
-    with c4: st.caption("Échelle"); scale = st.slider("sc", 0.1, 4.0, 1.0, 0.01, label_visibility="collapsed")
+    with c4: st.caption("Échelle"); scale = st.slider("sc", 0.1, 3.0, 1.0, 0.01, label_visibility="collapsed")
 
     cr, ci = st.columns([1,3])
     with cr:
