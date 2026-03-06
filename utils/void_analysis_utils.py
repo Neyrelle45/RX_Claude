@@ -258,16 +258,18 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100)
                       if len(uniq) else total_mask
         ratio_local = r.area / max(parent_size, 1)
 
-        # TEMPORAIRE: filtres désactivés pour debug
-        # if ar < 0.15 and ecc > 0.97:   # barre extrêmement fine
-        #     continue
-        # if circ < 0.05 and ar < 0.20:  # rectangle très très plat
-        #     continue
-        # Garder filtre BGA strict
-        if circ > 0.88 and ar > 0.88 and r.area > 600:  # cercle quasi-parfait = bille BGA
+        # Filtres réactivés avec seuils TRES permissifs
+        # 1. Rejeter blobs GIGANTESQUES (probablement tout le fond du pad)
+        if ratio_local > 0.40:  # > 40% du pad local = artefact
             continue
-        # if ratio_local > 0.50:          # > 50% du pad = artefact
-        #     continue
+        # 2. Barres/rectangles extrêmes seulement
+        if ar < 0.10 and ecc > 0.98:   # barre ultra-fine
+            continue
+        if circ < 0.03 and ar < 0.15:  # rectangle ultra-plat
+            continue
+        # 3. BGA : cercles parfaits ET grands
+        if circ > 0.85 and ar > 0.85 and r.area > 500:
+            continue
         filtered[labeled == r.label] = 1
 
     return filtered.astype(bool), float(thr)
