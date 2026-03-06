@@ -288,10 +288,6 @@ def show_color_legend():
     <span><b>Rouge vif</b> — Void / manque de soudure (zone la plus sombre dans la soudure)</span>
   </div>
   <div class="legend-item">
-    <div class="swatch" style="background:#50dcff;border:1px solid #aaa"></div>
-    <span><b>Cadre bleu ciel</b> — Contour + centre du plus gros void intérieur</span>
-  </div>
-  <div class="legend-item">
     <div class="swatch" style="background:#111;border:1px solid #888"></div>
     <span><b>Noir</b> — Zone exclue par le masque (non analysée)</span>
   </div>
@@ -712,15 +708,13 @@ def main():
                 _n_v     = int(_cur_vm.sum())
                 _vr_live = _n_v / max(_n_total, 1) * 100
                 
-                # Recalculer le plus gros void intérieur (% de la surface TOTALE inspectée)
+                # Recalculer le plus gros void (simplement le blob avec la plus grande aire)
                 _lbl_m   = _meas_m.label(_cur_vm.astype(np.uint8), connectivity=2)
-                _big_r   = 0.0
                 _big_area = 0
                 for _rm in _meas_m.regionprops(_lbl_m):
                     if _rm.area > _big_area:
                         _big_area = _rm.area
-                        _big_r = _rm.area / max(_n_total, 1) * 100
-                _lr_live = _big_r
+                _lr_live = _big_area / max(_n_total, 1) * 100 if _big_area > 0 else 0.0
                 _nv_live = int(_lbl_m.max())
             else:
                 _vr_live = st.session_state["results"].get("void_ratio", 0)
@@ -779,7 +773,12 @@ def main():
                              type="secondary"):
                     # Utiliser l'image CORRIGÉE depuis session_state
                     vis_corrected = st.session_state.get("vis_image", vis_image)
-                    archive_result(fname, st.session_state["results"], vis_corrected)
+                    # Utiliser les métriques LIVE (recalculées après corrections)
+                    results_corrected = st.session_state["results"].copy()
+                    results_corrected["void_ratio"] = vr  # vr = _vr_live
+                    results_corrected["largest_void_ratio"] = lr  # lr = _lr_live
+                    results_corrected["num_voids"] = nv  # nv = _nv_live
+                    archive_result(fname, results_corrected, vis_corrected)
                     st.success("✅ Archivé ! → onglet 🗄️ Archive")
 
     # ══ ARCHIVE ═══════════════════════════════════════════════════════════════
@@ -830,10 +829,9 @@ La **prévisualisation live** en bas de la sidebar se met à jour à chaque chan
 ### 6. Interprétation couleurs
 | Couleur | Signification |
 |---------|--------------|
-| 🔵 Bleu foncé | Soudure (canal 0 > 50%) |
-| 🔴 Rouge | Void / manque (canal 1 > 50%) |
-| 🟦 Cadre bleu ciel | Plus gros void intérieur |
-| ⬛ Noir | Zone exclue |
+| 🟢 Vert | Soudure présente (zone inspectée sans manque) |
+| 🔴 Rouge | Void / manque de soudure (zone la plus sombre) |
+| ⬛ Noir | Zone exclue par le masque (non analysée) |
 
 ### 7. Archive
 **Archiver** → stocke image + métriques en session.
