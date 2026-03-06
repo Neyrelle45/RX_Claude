@@ -216,11 +216,11 @@ def sidebar(image_rgb_ref):
         st.markdown("---")
         st.markdown("### 🎯 Détection")
         st.caption("Ajustement seuil")
-        sensitivity = st.slider("sens", -30, 30, -10, 5, label_visibility="collapsed",
+        sensitivity = st.slider("sens", -30, 30, -15, 5, label_visibility="collapsed",
             help="Négatif = plus de voids, Positif = moins")
         st.caption("Taille min. void (px)")
-        min_void_px = st.slider("minv", 20, 1000, 50, 10, label_visibility="collapsed",
-            help="Blobs plus petits ignorés. 50px = défaut.")
+        min_void_px = st.slider("minv", 10, 1000, 30, 10, label_visibility="collapsed",
+            help="Blobs plus petits ignorés. 30px = défaut.")
         solder_thr = None   # non utilisé dans approche classique
 
     return contrast, brightness, sharpen, filter_geo, sensitivity, min_void_px
@@ -498,9 +498,18 @@ def main():
                          "✅ Ajouter void  (clic vert→rouge)"],
                         horizontal=True, key="ov_action")
 
-                    # Image cliquable
+                    # Image cliquable - RÉGÉNÉRER SANS CROP pour bon mapping coords
                     from PIL import Image as _PIL2
-                    _vis_rgb = st.session_state["vis_image"].astype(np.uint8)
+                    # Recréer visualization NON croppée
+                    _bm_manual = ((mask[:,:,1]>100)&(mask[:,:,2]<100)&
+                                  (mask[:,:,0]<100)).astype(np.uint8) \
+                                 if mask.ndim==3 else (mask>127).astype(np.uint8)
+                    _vis_uncropped = create_visualization(
+                        image_rgb, None, _bm_manual, 
+                        st.session_state["results"], 
+                        no_crop=True  # CRITIQUE: pas de crop pour bon mapping
+                    )
+                    _vis_rgb = _vis_uncropped.astype(np.uint8)
                     _vis_pil = _PIL2.fromarray(_vis_rgb).resize(
                         (_DISP_W, _DISP_H), _PIL2.LANCZOS)
 
