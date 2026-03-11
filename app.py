@@ -20,8 +20,8 @@ import sys as _sys
 import os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 
-# VERSION 2026-03-12-v2 - Force deployment with new module name
-from utils.void_detection_v2 import (
+# VERSION 2026-03-12-v3 - OVERWRITE void_analysis_utils.py with all fixes
+from utils.void_analysis_utils import (
     preprocess_image, apply_mask, analyze_voids,
     create_visualization, resize_with_aspect_ratio,
     remove_padding_and_restore, detect_voids_threshold,
