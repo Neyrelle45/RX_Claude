@@ -218,12 +218,12 @@ def sidebar(image_rgb_ref):
         st.markdown("### 🎯 Détection")
         st.caption("Ajustement seuil")
         sensitivity = st.slider("sens", -30, 30, 0, 5, label_visibility="collapsed",
-            help="Négatif = plus de voids (seuil plus bas), Positif = moins de voids (seuil plus haut)")
+            help="Biais par défaut = -10 (agressif). 0 = biais -10, +10 = Otsu pur, -10 = très agressif")
         if sensitivity == 0:
-            st.caption("💡 Tout rouge ? → Augmentez le seuil (+10 à +20)")
+            st.caption("💡 Voids manqués ? Laissez à 0 (biais -10). Trop de détection ? → +10 à +15")
         st.caption("Taille min. void (px)")
-        min_void_px = st.slider("minv", 10, 1000, 30, 10, label_visibility="collapsed",
-            help="Blobs plus petits ignorés. 30px = défaut.")
+        min_void_px = st.slider("minv", 10, 1000, 20, 10, label_visibility="collapsed",
+            help="Blobs plus petits ignorés. 20px = défaut (taille significative).")
         solder_thr = None   # non utilisé dans approche classique
 
     return contrast, brightness, sharpen, filter_geo, sensitivity, min_void_px
