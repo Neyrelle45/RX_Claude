@@ -126,36 +126,48 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100,
         return np.zeros(gray_image.shape, dtype=bool), 0.0
 
     # ── 1. Normalisation robuste par percentile dans le masque ──────────────
-    # Stretch p5→p95 (équilibre entre contraste et stabilité)
+    # Stretch p3→p97 (plus agressif pour détecter voids faibles)
     vals_raw = gray_image[roi_mask > 0]
-    p5  = float(np.percentile(vals_raw, 5))
-    p95 = float(np.percentile(vals_raw, 95))
+    p3  = float(np.percentile(vals_raw, 3))
+    p97 = float(np.percentile(vals_raw, 97))
     stretched = np.clip(
-        (gray_image.astype(np.float32) - p5) / max(p95 - p5, 1) * 255,
+        (gray_image.astype(np.float32) - p3) / max(p97 - p3, 1) * 255,
         0, 255).astype(np.uint8)
-    _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
+    # CLAHE TRÈS fort pour révéler tous les voids subtils
+    _clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(16, 16))
     enhanced = _clahe.apply(stretched)
 
     # ── 2. Otsu sur les pixels du masque uniquement ───────────────────────────
     vals = enhanced[roi_mask > 0].reshape(-1, 1).astype(np.uint8)
     thr_otsu, _ = cv2.threshold(vals, 0, 255,
                                 cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    thr = float(thr_otsu) + float(sensitivity)
+    
+    # BIAIS AGRESSIF : Otsu global rate souvent les voids dans les pads gris moyens
+    # On applique un offset par défaut NÉGATIF pour forcer plus de détection
+    # sensitivity=0 → offset -10 (plus de voids)
+    # sensitivity=+10 → offset 0 (Otsu pur)
+    # sensitivity=-10 → offset -20 (très agressif)
+    DEFAULT_BIAS = -10  # Biais par défaut pour détecter plus
+    thr = float(thr_otsu) + DEFAULT_BIAS + float(sensitivity)
+    
+    # Sécurité : ne pas descendre en dessous de 50 (sinon tout devient void)
+    thr = max(thr, 50.0)
 
     # ── 3. Voids = pixels CLAIRS (> seuil) en RX ─────────────────────────────
     # PHYSIQUE RX : zones claires = peu de métal (RX traversent) = VOIDS
     #               zones sombres = métal dense (RX absorbés) = SOUDURE
     void_raw = (enhanced.astype(np.float32) > thr) & (roi_mask > 0)
 
-    # ── 4. Morphologie LÉGÈRE UNIQUEMENT ──────────────────────────────────────
-    # Images RX propres → morphologie minimale pour préserver les voids séparés
-    k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    # ── 4. Morphologie MINIMALE pour contours précis ─────────────────────────
+    # Images RX propres → morphologie très légère
+    # Ouverture avec k2 au lieu de k3 pour préserver les contours
+    k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
     
-    # Ouverture très légère : supprime SEULEMENT le bruit de 1-2 pixels
-    cleaned = cv2.morphologyEx(void_raw.astype(np.uint8), cv2.MORPH_OPEN, k3)
+    # Ouverture ultra-légère : supprime SEULEMENT le bruit isolé 1 pixel
+    cleaned = cv2.morphologyEx(void_raw.astype(np.uint8), cv2.MORPH_OPEN, k2)
     
-    # PAS de fermeture : elle fusionne les voids proches
-    # L'annotation manuelle fonctionne bien sans fermeture → on l'aligne
+    # Alternative : si les contours sont encore imprécis, essayer sans morphologie
+    # cleaned = void_raw.astype(np.uint8)
     
     # ── Anti "fromage grignoté" : combler les encoches de vias ───────────────
     # Principe : les vias créent de petites concavités sur le bord des voids.
@@ -311,17 +323,19 @@ def smart_add_void(gray_image, roi_mask, current_void_mask, click_y, click_x):
     """
     # Normalisation identique à detect_voids_threshold
     vals_raw = gray_image[roi_mask > 0]
-    p5  = float(np.percentile(vals_raw, 5))
-    p95 = float(np.percentile(vals_raw, 95))
+    p3  = float(np.percentile(vals_raw, 3))
+    p97 = float(np.percentile(vals_raw, 97))
     stretched = np.clip(
-        (gray_image.astype(np.float32) - p5) / max(p95 - p5, 1) * 255,
+        (gray_image.astype(np.float32) - p3) / max(p97 - p3, 1) * 255,
         0, 255).astype(np.uint8)
-    _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
+    _clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(16, 16))
     enhanced = _clahe.apply(stretched)
 
     vals   = enhanced[roi_mask > 0].reshape(-1, 1).astype(np.uint8)
     thr, _ = cv2.threshold(vals, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    thr    = float(thr)
+    # Même biais agressif que detect_voids_threshold
+    thr    = float(thr) - 10.0
+    thr    = max(thr, 50.0)
 
     # Voids = zones CLAIRES (> seuil)
     bright  = (enhanced.astype(np.float32) > thr) & (roi_mask > 0)
