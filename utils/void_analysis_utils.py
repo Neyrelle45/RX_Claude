@@ -147,16 +147,16 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100,
     #               zones sombres = métal dense (RX absorbés) = SOUDURE
     void_raw = (enhanced.astype(np.float32) > thr) & (roi_mask > 0)
 
-    # ── 4. Morphologie ────────────────────────────────────────────────────────
+    # ── 4. Morphologie LÉGÈRE UNIQUEMENT ──────────────────────────────────────
+    # Images RX propres → morphologie minimale pour préserver les voids séparés
     k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    k7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-
-    # Ouverture légère : supprime le bruit ponctuel
+    
+    # Ouverture très légère : supprime SEULEMENT le bruit de 1-2 pixels
     cleaned = cv2.morphologyEx(void_raw.astype(np.uint8), cv2.MORPH_OPEN, k3)
-    # Fermeture modérée k7 (pas k13) : soude les fragments sans fusionner
-    # les pistes voisines qui touchent un void
-    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, k7)
-
+    
+    # PAS de fermeture : elle fusionne les voids proches
+    # L'annotation manuelle fonctionne bien sans fermeture → on l'aligne
+    
     # ── Anti "fromage grignoté" : combler les encoches de vias ───────────────
     # Principe : les vias créent de petites concavités sur le bord des voids.
     # On détecte ces concavités via les défauts du hull convexe,
