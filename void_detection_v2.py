@@ -1,5 +1,6 @@
 """
-Utilitaires V8 — Détection 100% classique, zéro IA.
+VOID DETECTION V2 — 2026-03-12 FORCE DEPLOYMENT
+Détection 100% classique, zéro IA.
 
 PHYSIQUE RX VALIDÉE SUR DATASET :
   Soudure dense  → absorbe les RX → pixel SOMBRE  (moy ~58)
@@ -7,7 +8,9 @@ PHYSIQUE RX VALIDÉE SUR DATASET :
   Séparation ~27 niveaux → Otsu local parfait
 
 ALGORITHME :
-  1. CLAHE local (clipLimit=3, grid=8×8) → rehausse contraste dans le masque
+  1. CLAHE local (clipLimit=4.0, grid=16×16) → rehausse contraste
+  2. Otsu + BIAIS -10 agressif par défaut
+  3. Morphologie minimale (k2) pour préserver contours
   2. Otsu calculé UNIQUEMENT sur les pixels du masque utilisateur
   3. Pixels > seuil Otsu dans le masque = voids candidats
   4. Morphologie : ouverture (supprime bruit) + fermeture (soude les blobs)
@@ -133,15 +136,25 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100,
     stretched = np.clip(
         (gray_image.astype(np.float32) - p3) / max(p97 - p3, 1) * 255,
         0, 255).astype(np.uint8)
-    # CLAHE plus fort pour révéler voids subtils
-    _clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(16, 16))
+    # CLAHE TRÈS fort pour révéler tous les voids subtils
+    _clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(16, 16))
     enhanced = _clahe.apply(stretched)
 
     # ── 2. Otsu sur les pixels du masque uniquement ───────────────────────────
     vals = enhanced[roi_mask > 0].reshape(-1, 1).astype(np.uint8)
     thr_otsu, _ = cv2.threshold(vals, 0, 255,
                                 cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    thr = float(thr_otsu) + float(sensitivity)
+    
+    # BIAIS AGRESSIF : Otsu global rate souvent les voids dans les pads gris moyens
+    # On applique un offset par défaut NÉGATIF pour forcer plus de détection
+    # sensitivity=0 → offset -10 (plus de voids)
+    # sensitivity=+10 → offset 0 (Otsu pur)
+    # sensitivity=-10 → offset -20 (très agressif)
+    DEFAULT_BIAS = -10  # Biais par défaut pour détecter plus
+    thr = float(thr_otsu) + DEFAULT_BIAS + float(sensitivity)
+    
+    # Sécurité : ne pas descendre en dessous de 50 (sinon tout devient void)
+    thr = max(thr, 50.0)
 
     # ── 3. Voids = pixels CLAIRS (> seuil) en RX ─────────────────────────────
     # PHYSIQUE RX : zones claires = peu de métal (RX traversent) = VOIDS
@@ -279,7 +292,7 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100,
 
         # Filtres réactivés avec seuils TRES permissifs
         # 1. Rejeter blobs GIGANTESQUES (probablement tout le fond du pad)
-        if ratio_local > 0.80:  # > 80% de la surface totale = artefact
+        if ratio_local > 0.99:  # > 99% de la surface totale = tout le pad = artefact
             debug_info["rejets"].append(f"Blob {r.label}: ratio={ratio_local:.3f}")
             continue
         # 2. Barres/rectangles extrêmes seulement
@@ -318,12 +331,14 @@ def smart_add_void(gray_image, roi_mask, current_void_mask, click_y, click_x):
     stretched = np.clip(
         (gray_image.astype(np.float32) - p3) / max(p97 - p3, 1) * 255,
         0, 255).astype(np.uint8)
-    _clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(16, 16))
+    _clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(16, 16))
     enhanced = _clahe.apply(stretched)
 
     vals   = enhanced[roi_mask > 0].reshape(-1, 1).astype(np.uint8)
     thr, _ = cv2.threshold(vals, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    thr    = float(thr)
+    # Même biais agressif que detect_voids_threshold
+    thr    = float(thr) - 10.0
+    thr    = max(thr, 50.0)
 
     # Voids = zones CLAIRES (> seuil)
     bright  = (enhanced.astype(np.float32) > thr) & (roi_mask > 0)
