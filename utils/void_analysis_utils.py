@@ -1,5 +1,6 @@
 """
-Utilitaires V8 — Détection 100% classique, zéro IA.
+VOID DETECTION V2 — 2026-03-12 FORCE DEPLOYMENT
+Détection 100% classique, zéro IA.
 
 PHYSIQUE RX VALIDÉE SUR DATASET :
   Soudure dense  → absorbe les RX → pixel SOMBRE  (moy ~58)
@@ -7,7 +8,9 @@ PHYSIQUE RX VALIDÉE SUR DATASET :
   Séparation ~27 niveaux → Otsu local parfait
 
 ALGORITHME :
-  1. CLAHE local (clipLimit=3, grid=8×8) → rehausse contraste dans le masque
+  1. CLAHE local (clipLimit=4.0, grid=16×16) → rehausse contraste
+  2. Otsu + BIAIS -10 agressif par défaut
+  3. Morphologie minimale (k2) pour préserver contours
   2. Otsu calculé UNIQUEMENT sur les pixels du masque utilisateur
   3. Pixels > seuil Otsu dans le masque = voids candidats
   4. Morphologie : ouverture (supprime bruit) + fermeture (soude les blobs)
@@ -289,7 +292,7 @@ def detect_voids_threshold(gray_image, roi_mask, sensitivity=0, min_void_px=100,
 
         # Filtres réactivés avec seuils TRES permissifs
         # 1. Rejeter blobs GIGANTESQUES (probablement tout le fond du pad)
-        if ratio_local > 0.80:  # > 80% de la surface totale = artefact
+        if ratio_local > 0.99:  # > 99% de la surface totale = tout le pad = artefact
             debug_info["rejets"].append(f"Blob {r.label}: ratio={ratio_local:.3f}")
             continue
         # 2. Barres/rectangles extrêmes seulement
